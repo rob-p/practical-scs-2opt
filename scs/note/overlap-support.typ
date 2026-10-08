@@ -148,7 +148,7 @@
   #set text(size: 10pt)
   #align(center, strong[Abstract])
   #v(5pt)
-  #h(15pt)We study the count construction of Section~2 of _A Polynomial-Time 2-Approximation for Shortest Common Superstring_ (OpenAI, September 2026), which is defined over all $O(L^2)$ distinct substrings of the input. We prove that its base graph is supported on the at most $2L$ prefixes and suffixes of the input strings, and that the periodicity rule may be restricted, without changing any count, to pairs of words that are each simultaneously a prefix and a suffix of input strings. Both statements follow from a single _shift lemma_. Finally, we give a closed form for the blocking sums in terms of the edge multiplicities, which yields an algorithm that never materializes the substring set. We also show that restricting the rule to least periods is _not_ sound for this purpose. Finally, we implement the full connection phase of the preprint on top of these results. In experiments against an efficient greedy implementation, a simple order-merge post-pass makes the output competitive: it is shorter than greedy on repeat-rich inputs and on greedy's classical bad family, and it is often certified optimal by the lower bound $W$.
+  #h(15pt)We study the count construction of Section~2 of _A Polynomial-Time 2-Approximation for Shortest Common Superstring_ (OpenAI, September 2026), which is defined over all $O(L^2)$ distinct substrings of the input. We prove that its base graph is supported on the at most $2L$ prefixes and suffixes of the input strings, and that the periodicity rule may be restricted, without changing any count, to pairs of words that are each simultaneously a prefix and a suffix of input strings. Both statements follow from a single _shift lemma_. Finally, we give a closed form for the blocking sums in terms of the edge multiplicities, which yields an algorithm that never materializes the substring set. We also show that restricting the rule to least periods is _not_ sound for this purpose. Finally, we implement the full connection phase of the preprint on top of these results, in Python and in a parallel Rust implementation that reproduces the Python output exactly and solves inputs of $10^7$ symbols in a few seconds. In experiments against an efficient greedy implementation, a simple order-merge post-pass makes the output competitive: it is shorter than greedy on repeat-rich inputs and on greedy's classical bad family, and it is often certified optimal by the lower bound $W$.
 ]
 
 // ---------------------------------------------------------------------------
@@ -450,4 +450,101 @@ The baseline is the maximum-overlap greedy algorithm in its efficient form (`gre
 - _Small instances against the exact optimum_ ($200$ periodic and $200$ binary instances, $3$--$7$ strings). The raw output is wasteful, with mean ratio $1.15$ and $1.21$, because every connection is paid for by round trips through $epsilon$. After order-merge the mean ratios are $1.002$ and $1.013$, against $1.003$ and $1.006$ for greedy. Ours+om is optimal on $194$ and $168$ of the $200$ instances, greedy on $192$ and $180$.
 
 #paragraph[Cost.]
-The Python prototype is $10$--$80$ times slower than greedy, for example $11.9$#h(1em/6)s against $0.23$#h(1em/6)s on 1,816 repeat-rich reads. The main costs are the $O(abs(s))$ trie navigation of @cor:uv-only, the $T_A$ walks, and the record search of Section~5, which scans all $2 W$ layer windows for each hard case. All three admit standard indexed implementations.
+The Python prototype is $10$--$80$ times slower than greedy, for example $11.9$#h(1em/6)s against $0.23$#h(1em/6)s on 1,816 repeat-rich reads. The main costs are the $O(abs(s))$ trie navigation of @cor:uv-only, the $T_A$ walks, and the record search of Section~5, which scans all $2 W$ layer windows for each hard case. All three admit standard indexed implementations, which @sec:rust carries out.
+
+
+// ---------------------------------------------------------------------------
+= A compiled implementation <sec:rust>
+
+The Rust implementation in `rust/scs2` carries out the entire algorithm: the counts of @cor:uv-only, the connection phase and the Euler tour. It also includes the greedy baseline and order-merge. It treats the Python code as an oracle: its counts $u$ and $d$ must agree exactly, and so must its greedy output and the superstring produced by the 2-approximation. This section records the two facts its design relies on, how it is tested, and how it performs.
+
+#paragraph[Data structures.]
+Words of $Pre$ are the nodes of the trie $F$ of the inputs, and words of $Suf$ are the nodes of the trie $R$ of the reversed inputs. Both tries are built from the sorted inputs by longest common prefixes, and both carry Aho--Corasick failure links. An overlap word is identified in both tries by walking the failure chain of each input's end node in $F$. Each count of @cor:uv-only is then a pointer walk:
+- $lambda(s)$ gathers $u$ over the suffixes of support words, found by walking $R$ along the reversed word for suffixes in $Suf$, and by following the failure chain in $F$ for suffixes in $Pre without Suf$;
+- $rho(s)$ gathers $d$ over prefixes, symmetrically.
+
+Same-length nodes of $F$ are numbered in lexicographic order. Hence the edge order of the Python reference, decreasing length and then lexicographic, needs no string comparisons. The base graph, its closed-walk decomposition and the final Euler tour run on flat arrays over these word ids. The few vertices of added walks that lie outside $Pre union Suf$ are hashed.
+
+#lemma(name: [Level independence])[
+  Let $s$ be a word of $Pre union Suf$. The values $m(s)$, $u(s)$ and $d(s)$, and the set of rules triggered at $s$, depend only on $u$ and $d$ of words longer than $s$, together with $d(s)$ itself for the triggers.
+] <lem:level>
+
+#proof[
+  By @cor:uv-only, $lambda(s)$ and $rho(s)$ sum over longer words. In @thm:closed, $D_A (s) - d(s)$ sums $d$ over the words $A\[0:n\)$ with $n > abs(s)$, and $T_A (s)$ sums $u$ over words $A\[-mu:n\) c$ with $n >= abs(s)$, which have length at least $abs(s) + 1$. The trigger at $s$ adds only $d(s)$.
+]
+
+#ind All words of one length can therefore be processed simultaneously. Each length level is handled in two phases. A parallel, read-only phase computes the values and the triggered rules. A second phase applies the updates: the bookkeeping runs in level order and the commutative additions run in parallel. The result does not depend on the number of threads.
+
+#lemma(name: [$T_A$ by one scan])[
+  Let $A$ have period $p$, and let $v_e$ be the Aho--Corasick state of $F$ after reading $A\[0:e\)$. Then
+  $
+    T_A (x) = sum_(e >= abs(x)) sum_(w) mu_(s,e) dot.c bigp(sum_(c) u(w c) - u(w A(e))),
+  $
+  where $w = A\[s:e\)$ ranges over the nodes on the failure chain of $v_e$ with $0 <= s < p$, and $mu_(s,e) = floor((e - abs(x)) \/ p) - [s > 0] + 1$. Terms with $mu_(s,e) <= 0$ are omitted. Moreover, once the depth of $v_e$ is at most $e - p$, no later $e$ contributes.
+] <lem:scan>
+
+#proof[
+  Write the start of a word $A\[-mu:n\) c$ in $T_A (x)$ as $s - j p$ with $0 <= s < p$ and $j >= [s > 0]$. By periodicity the word is $A\[s:e\) c$ with $e = n + j p$, and $c != A(n) = A(e)$. For fixed $s$ and $e$, the admissible $j$ are those with $n = e - j p >= abs(x)$, and there are $mu_(s,e)$ of them. Since $u$ is supported on $Pre$, the inner sum over $c != A(e)$ vanishes unless $A\[s:e\) in Pre$. The failure chain of $v_e$ lists exactly the suffixes of $A\[0:e\)$ in $Pre$. Finally, the depth of $v_e$ grows by at most one per step, so once no chain node has $s < p$, none will later.
+]
+
+#ind An evaluation reads only words longer than $x$, consistent with @lem:level, and its cost no longer grows with $p$ times the read length. All terms are nonnegative, so a trigger test stops as soon as the total is positive. A pending rule is skipped, or its scan cut short, once it can no longer exceed the current value of $m(w)$. The connection phase uses an index of layer windows by word for the record search. Among all admissible records the index returns the one that the reference implementation's linear scan finds first, and it is built only when a hard case occurs.
+
+#paragraph[Exactness.]
+The test suite generates fixtures with the Python reference: 3,712 small instances (random, periodic, Fibonacci-type and greedy's bad family, including non-ASCII alphabets) and $64$ medium repeat-rich read sets with 52,300 reads in total. On all of them the Rust implementation reproduces $u$, $d$ and $W$, greedy's output and the 2-approximation's superstring character for character. Altering the Euler-tour order changes 2,119 of the 3,712 superstrings, and altering a rule bound changes 2,155 count vectors, so the tests do detect differences. An earlier hash-based version passed every small fixture yet produced a wrong $W$ on large repeat-rich inputs. The medium fixtures were added to catch exactly that, and they now pass.
+
+#paragraph[Performance.]
+@tab:rust-syn and @tab:rust-real report end-to-end times (counts, connection phase, Euler tour and order-merge) on a 32-core workstation, with peak memory in @tab:rust-syn. Greedy runs on one thread.
+
+#show figure.where(kind: table): it => { show figure.caption: set align(left); it }
+#figure(
+  kind: table,
+  caption: [Synthetic read sets ($100$ bp, error-free) from genomes of length $L \/ 10$. Lengths are relative to $W$; bold marks a strict improvement over greedy.],
+  {
+    set text(size: 9pt)
+    table(
+      columns: (auto, auto, auto, auto, auto, auto, auto, auto),
+      align: (left, right, right, right, right, right, right, right),
+      stroke: none,
+      inset: (x: 5pt, y: 2.6pt),
+      table.hline(stroke: 0.8pt),
+      table.header([genome], [$L$], [greedy], [ours+om], [greedy time], [ours, 1 thread], [ours, 16 threads], [memory]),
+      table.hline(stroke: 0.5pt),
+      [random genome], [$2 dot 10^6$], [1.0000], [1.0000], [0.27 s], [1.82 s], [0.73 s], [0.5 GB],
+      [repeat-rich genome], [$2 dot 10^6$], [1.0091], [*1.0000*], [0.24 s], [2.30 s], [1.08 s], [0.4 GB],
+      [random genome], [$10^7$], [1.0000], [1.0000], [2.31 s], [11.60 s], [4.74 s], [2.2 GB],
+      [repeat-rich genome], [$10^7$], [1.0075], [*1.0002*], [2.25 s], [16.24 s], [7.08 s], [2.1 GB],
+      table.hline(stroke: 0.8pt),
+    )
+  },
+) <tab:rust-syn>
+#v(6pt)
+
+#figure(
+  kind: table,
+  caption: [Real data: GENCODE v49 human protein-coding transcripts, reads simulated from them, and SEQC RNA-seq reads (Illumina, with sequencing errors). Lengths are relative to $W$; $n$ counts strings after reduction.],
+  {
+    set text(size: 9pt)
+    table(
+      columns: (auto, auto, auto, auto, auto, auto, auto, auto),
+      align: (left, right, right, right, right, right, right, right),
+      stroke: none,
+      inset: (x: 5pt, y: 2.6pt),
+      table.hline(stroke: 0.8pt),
+      table.header([input], [$L$], [$n$], [greedy], [ours+om], [greedy time], [ours, 16 threads], [hard cases]),
+      table.hline(stroke: 0.5pt),
+      [GENCODE transcripts], [$2 dot 10^6$], [802], [1.00000], [1.00000], [0.20 s], [1.46 s], [0],
+      [GENCODE transcripts], [$10^7$], [3,728], [1.00000], [1.00000], [1.17 s], [7.54 s], [0],
+      [simulated transcript reads], [$2 dot 10^6$], [17,345], [1.00000], [1.00001], [0.25 s], [1.08 s], [0],
+      [simulated transcript reads], [$10^7$], [84,766], [1.00000], [1.00000], [2.54 s], [8.12 s], [0],
+      [SEQC RNA-seq reads], [$2 dot 10^6$], [19,735], [1.00004], [1.00008], [0.28 s], [1.44 s], [0],
+      [SEQC RNA-seq reads], [$10^7$], [95,419], [1.00001], [1.00004], [2.57 s], [9.06 s], [1],
+      table.hline(stroke: 0.8pt),
+    )
+  },
+) <tab:rust-real>
+#v(6pt)
+
+#ind At $L = 10^7$, the full algorithm takes $4.7$--$9.1$#h(1em/6)s on $16$ threads, using $2$--$3.5$#h(1em/6)GB. On one thread it takes $11.6$--$16.2$#h(1em/6)s on the synthetic sets. Greedy takes about $1.2$--$2.6$#h(1em/6)s. The Python prototype needs $80$--$100$#h(1em/6)s for the counts alone at $L = 2 dot 10^6$. The two kinds of data behave differently:
+
+- _Periodic structure._ On the tandem-repeat genomes, greedy is $0.75$--$0.9%$ above $W$, while ours+om reaches $W$ or comes within $0.02%$ of it. Here the period rule is active, with $114$ and $519$ hard cases.
+- _Real data._ On the transcripts and both kinds of reads, greedy is already within $0.005%$ of $W$, and so is ours+om. Hard cases are essentially absent ($0$ or $1$). Here the 2-approximation's contribution is a certificate of near-optimality rather than a shorter string.
