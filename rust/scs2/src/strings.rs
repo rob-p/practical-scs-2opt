@@ -37,7 +37,16 @@ pub struct AhoCorasick {
     pub hi: Vec<u32>,
     /// Node reached by each full pattern.
     pub end_node: Vec<u32>,
+    /// All non-root nodes in BFS order (nondecreasing depth).
+    pub bfs: Vec<u32>,
+    /// Dense child table for small alphabets: dense[v * sigma + code[c]] (empty if unused).
+    dense: Vec<u32>,
+    code: [u8; 256],
+    sigma: usize,
 }
+
+/// Dense child tables are used when all symbols are < 256 and there are at most this many.
+const DENSE_MAX_SIGMA: usize = 16;
 
 pub const NONE: u32 = u32::MAX;
 
@@ -65,6 +74,10 @@ impl AhoCorasick {
             lo: Vec::with_capacity(cap),
             hi: Vec::with_capacity(cap),
             end_node: Vec::with_capacity(patterns.len()),
+            bfs: Vec::new(),
+            dense: Vec::new(),
+            code: [u8::MAX; 256],
+            sigma: 0,
         };
         let mut last_child: Vec<u32> = Vec::with_capacity(cap);
         let push = |t: &mut AhoCorasick,
@@ -157,6 +170,35 @@ impl AhoCorasick {
         t.child_off.push(t.child_node.len() as u32);
         drop(first_child);
         drop(next_sib);
+        // dense table for small alphabets
+        let mut present = [false; 256];
+        let mut small = true;
+        for &c in &t.child_sym {
+            if c < 256 {
+                present[c as usize] = true;
+            } else {
+                small = false;
+                break;
+            }
+        }
+        let sigma = present.iter().filter(|&&x| x).count();
+        if small && sigma <= DENSE_MAX_SIGMA {
+            let mut k = 0u8;
+            for (c, &pr) in present.iter().enumerate() {
+                if pr {
+                    t.code[c] = k;
+                    k += 1;
+                }
+            }
+            t.sigma = sigma.max(1);
+            t.dense = vec![NONE; n * t.sigma];
+            for v in 0..n {
+                for ci in t.child_off[v]..t.child_off[v + 1] {
+                    let c = t.child_sym[ci as usize] as usize;
+                    t.dense[v * t.sigma + t.code[c] as usize] = t.child_node[ci as usize];
+                }
+            }
+        }
         // failure and dictionary links in BFS order
         t.fail = vec![0; n];
         t.dict_link = vec![0; n];
@@ -189,6 +231,7 @@ impl AhoCorasick {
                 queue.push(w);
             }
         }
+        t.bfs = queue;
         t
     }
 
@@ -199,6 +242,16 @@ impl AhoCorasick {
     /// Child of v labelled c, or NONE.
     #[inline]
     pub fn child(&self, v: u32, c: Sym) -> u32 {
+        if !self.dense.is_empty() {
+            if c >= 256 {
+                return NONE;
+            }
+            let k = self.code[c as usize];
+            if k == u8::MAX {
+                return NONE;
+            }
+            return self.dense[v as usize * self.sigma + k as usize];
+        }
         let (lo, hi) = (
             self.child_off[v as usize] as usize,
             self.child_off[v as usize + 1] as usize,
@@ -236,34 +289,60 @@ impl AhoCorasick {
 
 /// Drop empty strings, duplicates, and strings contained in another input. Returns sorted output.
 pub fn reduce_instance(strings: &[Word]) -> Vec<Word> {
+    reduce_instance_keep_ac(strings).0
+}
+
+/// As `reduce_instance`, also returning the automaton of the result when it could be reused
+/// (nothing was removed after deduplication).
+pub fn reduce_instance_keep_ac(strings: &[Word]) -> (Vec<Word>, Option<AhoCorasick>) {
+    use rayon::prelude::*;
     let mut s: Vec<Word> = strings.iter().filter(|x| !x.is_empty()).cloned().collect();
-    s.sort();
+    s.par_sort_unstable();
     s.dedup();
     let ac = AhoCorasick::new(&s);
-    let mut dead = vec![false; s.len()];
-    for (i, x) in s.iter().enumerate() {
-        let mut v = 0u32;
-        for &c in x {
-            v = ac.step(v, c);
-            let mut w = if ac.term[v as usize] != NONE {
-                v
-            } else {
-                ac.dict_link[v as usize]
-            };
-            while w != 0 {
-                let j = ac.term[w as usize] as usize;
-                if j != i {
-                    dead[j] = true;
+    // every pattern occurring inside another pattern (scan in parallel, mark sequentially)
+    let hits: Vec<Vec<u32>> = s
+        .par_iter()
+        .enumerate()
+        .map(|(i, x)| {
+            let mut out = Vec::new();
+            let mut v = 0u32;
+            for &c in x {
+                v = ac.step(v, c);
+                let mut w = if ac.term[v as usize] != NONE {
+                    v
+                } else {
+                    ac.dict_link[v as usize]
+                };
+                while w != 0 {
+                    let j = ac.term[w as usize];
+                    if j as usize != i {
+                        out.push(j);
+                    }
+                    w = ac.dict_link[w as usize];
                 }
-                w = ac.dict_link[w as usize];
             }
+            out
+        })
+        .collect();
+    let mut dead = vec![false; s.len()];
+    let mut any = false;
+    for h in hits {
+        for j in h {
+            dead[j as usize] = true;
+            any = true;
         }
     }
-    s.into_iter()
+    if !any {
+        return (s, Some(ac));
+    }
+    let kept = s
+        .into_iter()
         .zip(dead)
         .filter(|(_, d)| !d)
         .map(|(x, _)| x)
-        .collect()
+        .collect();
+    (kept, None)
 }
 
 /// Longest proper suffix of `a` that is a proper prefix of `b`.

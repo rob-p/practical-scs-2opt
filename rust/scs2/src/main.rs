@@ -41,7 +41,7 @@ fn main() {
             let c = compute_counts(&input);
             let dt = t.elapsed().as_secs_f64();
             println!(
-                "{{\"cmd\":\"counts\",\"n\":{},\"L\":{},\"W\":{},\"u_support\":{},\"d_support\":{},\"words\":{},\"overlap_words\":{},\"rules\":{},\"fired\":{},\"t_setup\":{:.2},\"secs\":{:.4}}}",
+                "{{\"cmd\":\"counts\",\"n\":{},\"L\":{},\"W\":{},\"u_support\":{},\"d_support\":{},\"words\":{},\"overlap_words\":{},\"rules\":{},\"fired\":{},\"t_setup\":{:.2},\"t_phase_a\":{:.2},\"t_phase_b\":{:.2},\"secs\":{:.4}}}",
                 c.strings.len(),
                 total_len,
                 c.w,
@@ -52,6 +52,8 @@ fn main() {
                 c.stats.rules,
                 c.stats.fired,
                 c.stats.t_setup,
+                c.stats.t_phase_a,
+                c.stats.t_phase_b,
                 dt
             );
         }
