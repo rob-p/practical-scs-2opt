@@ -1,0 +1,432 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage[colorlinks=true,linkcolor=blue!45!black,citecolor=blue!45!black,urlcolor=blue!45!black]{hyperref}
+\usepackage{xcolor}
+\usepackage[nameinlink,noabbrev,capitalise]{cleveref}
+\numberwithin{equation}{section}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{conjecture}[theorem]{Conjecture}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{example}[theorem]{Example}
+\newcommand{\pref}{\operatorname{pref}}
+\newcommand{\suf}{\operatorname{suf}}
+\newcommand{\len}[1]{\lvert #1\rvert}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\ZZ}{\mathbb Z}
+\newcommand{\Pre}{\mathcal P}
+\newcommand{\Suf}{\mathcal Q}
+\newcommand{\Ov}{\mathcal O}
+\newcommand{\lsh}[1]{#1^{\leftarrow}}
+\setlist{itemsep=3pt,topsep=5pt}
+\title{The forced-count graph lives on prefixes and suffixes\\[2pt]
+\large Notes toward a practical version of the polynomial-time SCS 2-approximation}
+\date{October 8, 2026}
+\author{}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We study the count construction of Section~2 of \emph{A Polynomial-Time
+2-Approximation for Shortest Common Superstring} (OpenAI, September 2026),
+which is defined over all $O(L^2)$ distinct substrings of the input. We prove
+that its base graph is supported on the at most $2L$ prefixes and suffixes of
+the input strings, and that the periodicity rule may be restricted, without
+changing any count, to pairs of words that are each simultaneously a prefix and a suffix of
+input strings. Both statements follow from a single \emph{shift lemma}. Finally,
+we give a closed form for the blocking sums in terms of the edge multiplicities,
+which yields an algorithm that never materializes the substring set. We also
+show that restricting the rule to least periods is \emph{not} sound for this
+purpose.
+\end{abstract}
+
+\section{Setting}
+
+We use the notation of the preprint without change: the reduced instance
+$\mathcal S$ (substring-free, no empty or duplicate strings), the set $V$ of
+its distinct substrings, the blocking functional $B_A(s;m)$ of (2.2), the
+counts $m$ defined by the extension rules (2.4), the requirement rule, and
+the period rule (2.5), and the base multiplicities
+$u(s)=m(s)-\sum_c m(cs)$, $d(s)=m(s)-\sum_c m(sc)$. Missing words have count
+zero. Write
+\[
+\lambda(s)=\sum_{c\in\Sigma}m(cs),\qquad \rho(s)=\sum_{c\in\Sigma}m(sc),
+\]
+so that $u(s)=m(s)-\lambda(s)$ and $d(s)=m(s)-\rho(s)$. Let $\Pre$ and $\Suf$
+be the sets of nonempty prefixes and nonempty suffixes of the strings in
+$\mathcal S$, and let $\Ov=\Pre\cap\Suf$ be the set of \emph{overlap words}.
+Clearly $\len\Pre,\len\Suf\le L$, and every required string lies in $\Ov$.
+
+\begin{definition}
+A \emph{rule} is a quadruple $(A,v,w,k)$ as in (2.5): $A$ is a periodic text
+of period $p$, $v=A[0:\len v)\in V$, $w$ is a nonempty prefix of $v$, and
+$\len v=\len w+kp$ with $k\ge1$. It is \emph{triggered} if
+$m(v)>B_A(v;m)$; it then imposes $m(w)\ge B_A(w;m)+k+1$, its \emph{bound}.
+By construction, $m(s)$ is the maximum of $\lambda(s)$, $\rho(s)$, the
+requirement indicator, and the bounds of all triggered rules with $w=s$.
+\end{definition}
+
+For a text $A$ write $\lsh A$ for its translate $\lsh A(i)=A(i-1)$. If
+$A[0:\len s)=s$ and $a=A(-1)$, then $\lsh A[0:\len s+1)=as$, so
+$B_{\lsh A}(as;m)$ is defined. Translating a period-$p$ text yields a
+period-$p$ text.
+
+Two facts about $v$ and $w$ in a rule are used repeatedly. Since $w$ is a
+prefix of $v$, $w\notin\Pre$ implies $v\notin\Pre$. Since $v$ has period $p$
+and $\len v-\len w=kp$, also $w=v[kp:\len v)$, so $w$ is a suffix of $v$, and
+$w\notin\Suf$ implies $v\notin\Suf$.
+
+\section{Two elementary lemmas}
+
+\begin{lemma}[Prefix-free sums]\label{lem:pfree}
+Let $y$ be a nonempty word and $Z$ a finite prefix-free set of nonempty
+words. Then $\sum_{z\in Z}m(yz)\le m(y)$. Symmetrically, if $Z$ is
+suffix-free, then $\sum_{z\in Z}m(zy)\le m(y)$.
+\end{lemma}
+
+\begin{proof}
+Induct on the maximum length in $Z$. Group $Z$ by first letter $c$. If the
+one-letter word $c$ lies in $Z$, prefix-freeness makes it the only member
+beginning with $c$. Otherwise $Z_c=\{z':cz'\in Z\}$ is prefix-free, and
+induction gives $\sum_{z'\in Z_c}m(ycz')\le m(yc)$. Hence
+$\sum_{z\in Z}m(yz)\le\sum_c m(yc)\le m(y)$ by the right extension rule.
+(If $y\notin V$, every term is zero.) The suffix-free case is the mirror image,
+using the left extension rule.
+\end{proof}
+
+\begin{lemma}[Bracket decomposition]\label{lem:decomp}
+Let $A$ be periodic with $A[0:\len s)=s$, and put $a=A(-1)$, $e=A(\len s)$.
+Then
+\begin{align}
+B_A(s;m)&=\Lambda_A(s)+B_{\lsh A}(as;m),&\Lambda_A(s)&\le\sum_{c\ne a}m(cs),\label{eq:left-decomp}\\
+B_A(s;m)&=R_A(s)+B_A(se;m),&R_A(s)&\le\sum_{d\ne e}m(sd),\label{eq:right-decomp}
+\end{align}
+where $\Lambda_A(s)$ counts, with multiplicity $m(r)$, the bracketing
+placements of $s$ whose left mismatch is immediately before $s$, and
+$R_A(s)$ those whose right mismatch is immediately after $s$.
+\end{lemma}
+
+\begin{proof}
+Consider a counted placement $j$ of $s$ in $r$ as in (2.1)--(2.2).
+
+\emph{Left.} If $j\ge2$, then position $j-1$ is interior, so $r(j-1)=A(-1)=a$
+and $as$ occurs at $j'=j-1\ge1$. Substituting $A(i)=\lsh A(i+1)$ turns each
+condition of (2.1) for $(A,s,j)$ into the corresponding condition for
+$(\lsh A,as,j')$: the length condition $j'+\len{as}=j+\len s\le\len r-1$, the
+interior agreement $r(h)=A(h-j)=\lsh A(h-j')$, and the two end mismatches
+$r(0)\ne A(-j)=\lsh A(-j')$ and
+$r(\len r-1)\ne A(\len r-1-j)=\lsh A(\len r-1-j')$. The converse substitution
+is equally direct, so these placements are in bijection with the counted
+placements of $as$ relative to $\lsh A$, giving the second term. If $j=1$, then
+$r=c\,s\,x\,d$ with $c\ne a$, $x=A[\len s:\len s+\len x)$ and
+$d\ne A(\len s+\len x)$; the placement is unique for this $r$. For fixed $c$
+the tails $x d$ form a prefix-free set, since two of them first differ where
+one leaves $A$. \Cref{lem:pfree} bounds their total by $m(cs)$.
+
+\emph{Right.} Mirror image: a placement whose right mismatch is not adjacent
+to $s$ has $r(j+\len s)=A(\len s)=e$ and is exactly a counted placement of
+$se$ relative to $A$. The adjacent ones have the form $r=y\,s\,d$ with
+$d\ne e$, where the heads $y=c\,A[-\len y+1:0)$, $c\ne A(-\len y)$, form a
+suffix-free set.
+\end{proof}
+
+\begin{corollary}[Monotonicity of the unblocked surplus]\label{cor:mono}
+Put $U_A(s)=m(s)-B_A(s;m)$. Then $U_A(s)\ge0$, $U_A(s)\ge U_A(se)$ and
+$U_A(s)\ge U_{\lsh A}(as)$. In particular, for fixed $A$ and $w$, the
+rules $(A,A[0:\len w+kp),w,k)$ are triggered exactly for $k$ up to some
+threshold, and only the largest triggered $k$ gives a binding bound.
+\end{corollary}
+
+\begin{proof}
+By \eqref{eq:right-decomp} and the extension rule,
+$m(s)\ge m(se)+\sum_{d\ne e}m(sd)\ge m(se)+R_A(s)$; subtract
+$B_A(s;m)=R_A(s)+B_A(se;m)$. The left inequality is the mirror image.
+Nonnegativity follows by induction on decreasing length, since $U_A(se)=0$
+when $se\notin V$. If $A[0:\len w+kp)\in V$, so are its shorter prefixes, and
+the bound $B_A(w;m)+k+1$ increases with $k$.
+\end{proof}
+
+\section{The shift lemma}
+
+\begin{lemma}[Shift lemma]\label{lem:shift}
+Let $(A,v,w,k)$ be a triggered rule.
+\begin{enumerate}[label=\textup{(\alph*)}]
+\item If $m(v)=\lambda(v)$, then $\lambda(w)\ge B_A(w;m)+k+1$.
+\item If $m(v)=\rho(v)$, then $\rho(w)\ge B_A(w;m)+k+1$.
+\end{enumerate}
+\end{lemma}
+
+\begin{proof}
+(a) Let $a=A(-1)$; it is the left neighbor in $A$ of both $v$ and $w$. By
+\eqref{eq:left-decomp} for $v$ and the trigger,
+\[
+m(av)+\sum_{c\ne a}m(cv)=\lambda(v)=m(v)>B_A(v;m)
+=\Lambda_A(v)+B_{\lsh A}(av;m)\le\sum_{c\ne a}m(cv)+B_{\lsh A}(av;m).
+\]
+Hence $m(av)>B_{\lsh A}(av;m)\ge0$, so $av\in V$. Now
+$(\lsh A,av,aw,k)$ is a rule: $\lsh A$ has period $p$,
+$av=\lsh A[0:\len v+1)\in V$, $aw$ is a nonempty prefix of $av$, and
+$\len{av}-\len{aw}=kp$. It is triggered, so the definition of $m$ at the
+longer word $aw$ gives $m(aw)\ge B_{\lsh A}(aw;m)+k+1$. Applying
+\eqref{eq:left-decomp} to $w$,
+\[
+\lambda(w)=m(aw)+\sum_{c\ne a}m(cw)\ge B_{\lsh A}(aw;m)+k+1+\Lambda_A(w)
+=B_A(w;m)+k+1.
+\]
+
+(b) Let $e=A(\len v)$. Since $\len v-\len w=kp$, also $e=A(\len w)$. By
+\eqref{eq:right-decomp} for $v$ and the trigger, exactly as in (a),
+$m(ve)>B_A(ve;m)$, so $ve\in V$. Then $(A,ve,we,k)$ is a triggered rule:
+$ve=A[0:\len v+1)$, its prefix $A[0:\len w+1)=we$, and
+$\len{ve}-\len{we}=kp$. Hence $m(we)\ge B_A(we;m)+k+1$, and
+\eqref{eq:right-decomp} for $w$ gives
+$\rho(w)=m(we)+\sum_{d\ne e}m(wd)\ge B_A(we;m)+k+1+R_A(w)=B_A(w;m)+k+1$.
+\end{proof}
+
+\begin{remark}
+In words: if every counted occurrence of $v$ extends to the left, then the
+$k+1$ unblocked copies of $w$ that a rule extracts from $v$ can be shifted one
+letter to the left, as copies of $aw$ in $av$. The rule is then already
+implied by the left extension inequality at $w$. Part (b) uses the extension
+to the right, together with the period: $w$ and $v$ have the same right
+neighbor $e$ in $A$.
+\end{remark}
+
+\section{Main results}
+
+\begin{theorem}[Prefix/suffix support]\label{thm:support}
+For every nonempty $s\in V$:
+\[
+s\notin\Pre\implies m(s)=\lambda(s),\qquad
+s\notin\Suf\implies m(s)=\rho(s).
+\]
+Consequently $u(s)>0$ implies $s\in\Pre$, and $d(s)>0$ implies
+$s\in\Suf$. Every up edge of the base graph $G$ joins two words of
+$\Pre\cup\{\eps\}$, every down edge joins two words of
+$\Suf\cup\{\eps\}$, and $G$ has at most $\len{\Pre\cup\Suf}+1\le2L+1$
+vertices.
+\end{theorem}
+
+\begin{proof}
+Induct on decreasing length, proving both implications together. Let
+$s\notin\Pre$. Then $s$ is not required. For each letter $d$ with $sd\in V$,
+also $sd\notin\Pre$, so induction gives $m(sd)=\lambda(sd)$. Therefore
+\[
+\rho(s)=\sum_d\sum_c m(csd)=\sum_c\sum_d m(csd)\le\sum_c m(cs)=\lambda(s),
+\]
+by the right extension rule at each $cs$. Let $(A,v,s,k)$ be a triggered rule
+with target $s$. Then $v\notin\Pre$ and $\len v>\len s$, so $m(v)=\lambda(v)$
+by induction, and \cref{lem:shift}(a) bounds the rule by $\lambda(s)$. Every
+lower bound defining $m(s)$ is therefore at most $\lambda(s)$, and
+$m(s)=\lambda(s)$.
+
+Let $s\notin\Suf$. Symmetrically, $\lambda(s)\le\rho(s)$, using induction on
+$cs\notin\Suf$. For a triggered rule $(A,v,s,k)$, $s$ is a suffix of $v$, so
+$v\notin\Suf$. Induction gives $m(v)=\rho(v)$, and \cref{lem:shift}(b)
+bounds the rule by $\rho(s)$.
+
+For the consequences, $u(s)=m(s)-\lambda(s)$ and $d(s)=m(s)-\rho(s)$. An up
+edge $\pref(s)\to s$ is used only if $s\in\Pre$, and then
+$\pref(s)\in\Pre\cup\{\eps\}$. Similarly, a down edge $s\to\suf(s)$ is used only
+if $s\in\Suf$, and then $\suf(s)\in\Suf\cup\{\eps\}$.
+\end{proof}
+
+\begin{theorem}[Overlap-word restriction]\label{thm:restrict}
+Let $m'$ be defined by the same descending recursion as $m$, but imposing
+(2.5) only for rules with $v\in\Ov$ and $w\in\Ov$. Then $m'=m$ on all of $V$;
+in particular, both define the same base graph.
+\end{theorem}
+
+\begin{proof}
+Induct on decreasing length; assume $m'=m$ on all words longer than $s$.
+The quantities $\lambda(s)$, $\rho(s)$, $B_A(s;\cdot)$, and the triggers of
+all rules with target $s$ depend only on longer words, so they coincide for
+$m$ and $m'$. Since $m'(s)$ is the maximum of a subset of the bounds defining
+$m(s)$, we have $m'(s)\le m(s)$. Conversely, consider a triggered rule
+$(A,v,s,k)$ omitted from the restricted system, so $s\notin\Ov$ or
+$v\notin\Ov$. In either case $v\notin\Ov$, because $s\notin\Pre$ forces
+$v\notin\Pre$ and $s\notin\Suf$ forces $v\notin\Suf$. If $v\notin\Pre$, \cref{thm:support} gives $m(v)=\lambda(v)$ and
+\cref{lem:shift}(a) bounds the rule by $\lambda(s)\le m'(s)$. If
+$v\notin\Suf$, part (b) bounds it by $\rho(s)\le m'(s)$. Thus
+$m(s)\le m'(s)$.
+\end{proof}
+
+\begin{corollary}\label{cor:determined}
+Every count is determined by the counts on $\Pre\cup\Suf$: for
+$s\notin\Pre$, $m(s)=\sum_c m(cs)$, and for $s\notin\Suf$,
+$m(s)=\sum_c m(sc)$. The only period rules that must be evaluated are those with
+$v,w\in\Ov$, and, by \cref{cor:mono}, for each overlap word $w$ and each
+compatible periodic text $A$ only the largest triggered $k$.
+\end{corollary}
+
+\section{Least periods do not suffice}
+
+The rule (2.5) ranges over all periods of $v$, not only its least period. Restricting the rule to least
+periods weakens the bound, even on overlap words.
+
+\begin{example}\label{ex:least}
+Let $\mathcal S=\{\texttt{aabaa},\texttt{baaab}\}$, with optimum $7$
+(\texttt{baaabaa}). The word $v=\texttt{aabaa}\in\Ov$ has least period $3$ and
+also period $4$. With $A=(\texttt{aaba})^\infty$, the rule $(A,v,\texttt{a},1)$
+is triggered and gives $m(\texttt{a})\ge B_A(\texttt{a};m)+2=2+2=4$. All other
+bounds on $m(\texttt{a})$ are at most $3$. With all periods, $W=6$; with least
+periods only, $m(\texttt{a})=3$ and $W=5$. The base-graph lower bound is
+therefore genuinely weaker under the least-period restriction, and any
+efficient implementation must handle all periods of overlap words.
+\end{example}
+
+\section{Empirical confirmation and what remains}
+
+A direct implementation of the preprint's Section~2 confirmed every statement above,
+with no violations: \cref{thm:support} and both parts of \cref{lem:shift}
+(about $5\times10^6$ triggered rules), \cref{cor:mono}, and
+\cref{thm:restrict} (identical base graphs on $4\times10^5$ random,
+periodic, and Fibonacci-type instances).
+
+The following observation is not proved here.
+
+\begin{conjecture}
+Without the period rule, $W=\sum_c m(c)$ equals the weight of a minimum cycle
+cover of the overlap (distance) graph of $\mathcal S$.
+\end{conjecture}
+
+It held on all $1500$ instances tested. If true, the extension-only part of
+the construction is computable in $O(L)$ time by known Aho--Corasick
+techniques, and only the periodic correction is new.
+
+\paragraph{Consequence for the algorithm.}
+\Cref{thm:support,thm:restrict} reduce the vertex set from $O(L^2)$ to
+$\len{\Pre\cup\Suf}\le2L$, and the period rules to pairs of overlap words. On
+600 reads of length 100 from a random genome this is $1.25\times10^6$
+substrings versus $1.1\times10^5$ prefixes and suffixes and $2{,}879$ overlap
+words, with the number of $(v,p)$ rule sources falling from about
+$4\times10^5$ to $944$. The blocking sums are handled in the next section.
+
+\section{Blocking sums from the edge multiplicities}\label{sec:blocking}
+
+The blocking functional $B_A(w;m)$ ranges over bracketing words that need not
+lie in $\Pre\cup\Suf$. We now express it, and the trigger of a rule, using
+only $u$ and $d$, which by \cref{thm:support} live on $\Pre$ and $\Suf$
+respectively and have total multiplicity $W$ each.
+
+Throughout, $A$ is a periodic text with $A[0:\len x)=x$, and we write
+$x_n=A[0:n)$ for $n\ge\len x$.
+
+\begin{lemma}[Left-bracket telescoping]\label{lem:left-tele}
+For a nonempty word $y$ whose left context is read in $A$ (that is, we put
+$y_\mu=A[-\mu:0)\,y$), define
+\[
+\Lambda^*_A(y)=\sum_{\mu\ge0}\ \sum_{c\ne A(-\mu-1)} m(c\,y_\mu),
+\]
+the total count of words obtained from $y$ by extending along $A$ to the left
+and then adding one mismatching letter. Then
+$\Lambda^*_A(y)=m(y)-\sum_{\mu\ge0}u(y_\mu)$.
+\end{lemma}
+
+\begin{proof}
+For each $\mu$, $\sum_c m(c\,y_\mu)=\lambda(y_\mu)=m(y_\mu)-u(y_\mu)$, and the
+term with $c=A(-\mu-1)$ is $m(y_{\mu+1})$. Hence the $\mu$-th inner sum is
+$m(y_\mu)-u(y_\mu)-m(y_{\mu+1})$. Summing over $\mu$ telescopes. The sum is
+finite, since $y_\mu\notin V$ for large $\mu$, and then all terms vanish.
+\end{proof}
+
+\begin{theorem}[Closed form for blocking sums]\label{thm:closed}
+Put
+\[
+D_A(x)=\sum_{n\ge\len x}d(x_n),\qquad
+T_A(x)=\sum_{n\ge\len x}\ \sum_{c\ne A(n)}\ \sum_{\mu\ge0}
+u\bigl(A[-\mu:n)\,c\bigr).
+\]
+Then the unblocked surplus is
+\begin{equation}\label{eq:U-closed}
+U_A(x)=m(x)-B_A(x;m)=D_A(x)+T_A(x),
+\end{equation}
+and equivalently
+\begin{equation}\label{eq:B-closed}
+B_A(x;m)=\rho(x)-\bigl(D_A(x)-d(x)\bigr)-T_A(x).
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+In \cref{lem:decomp}, the bracketing placements of $x_n$ whose right mismatch
+is adjacent are exactly the words $c'\,A[-\mu:0)\,x_n\,c$ with
+$c'\ne A(-\mu-1)$ and $c\ne A(n)$, each with one placement. Hence, with
+equality, $R_A(x_n)=\sum_{c\ne A(n)}\Lambda^*_A(x_n c)$. Applying
+\cref{lem:left-tele} to $y=x_nc$, and using
+$\sum_{c\ne A(n)}m(x_nc)=\rho(x_n)-m(x_{n+1})=m(x_n)-d(x_n)-m(x_{n+1})$,
+\[
+R_A(x_n)=m(x_n)-m(x_{n+1})-d(x_n)
+-\sum_{c\ne A(n)}\sum_{\mu\ge0}u\bigl(A[-\mu:n)\,c\bigr).
+\]
+Iterating the right decomposition $B_A(x_n)=R_A(x_n)+B_A(x_{n+1})$ from
+$n=\len x$ until $x_n\notin V$, where everything vanishes, gives
+$B_A(x;m)=m(x)-D_A(x)-T_A(x)$. Finally $m(x)-d(x)=\rho(x)$.
+\end{proof}
+
+\begin{remark}[Walk interpretation]
+On the closed walks of Sections~2--3 of the preprint, \eqref{eq:U-closed} says
+that an occurrence of $x$ is unblocked exactly when, before any mismatch has entered on both
+sides, either the walk deletes the first letter of the occurrence while its
+window is still an $A$-aligned word $x_n$ (the term $D_A$), or the walk
+appends a first right mismatch $c$ while its window is an $A$-aligned word
+covering $x$ (the term $T_A$). This matches the proof of Lemma~3.4 of the
+preprint.
+\end{remark}
+
+\begin{corollary}[Counts from the supports of $u$ and $d$]\label{cor:uv-only}
+Process the words of $\Pre\cup\Suf$ in decreasing length. For each such word $s$,
+\[
+\lambda(s)=\sum_{\substack{y\text{ longer, ends with }s}}u(y),\qquad
+\rho(s)=\sum_{\substack{y\text{ longer, starts with }s}}d(y),
+\]
+by the telescoping identity in the proof of Lemma~3.1 of the preprint. Set $m(s)=\rho(s)$ if
+$s\notin\Suf$ and $m(s)=\lambda(s)$ if $s\notin\Pre$. If $s\in\Ov$, take the maximum of
+$\lambda(s)$, $\rho(s)$, the requirement indicator, and, for each pending rule $(A,k)$,
+\[
+\rho(s)+k+1-\bigl(D_A(s)-d(s)\bigr)-T_A(s).
+\]
+After fixing $m(s)$, set $u(s)=m(s)-\lambda(s)$ and $d(s)=m(s)-\rho(s)$. Then, for
+$s\in\Ov$ and each period $p$ of $s$, the rule with $A$ generated by
+$s[0:p)$ is triggered iff $D_A(s)+T_A(s)>0$. Every quantity used involves
+$u$ and $d$ only on words already processed, together with $d(s)$ itself in
+the trigger.
+\end{corollary}
+
+In particular a rule can raise $m(w)$ above $\rho(w)$ only if
+$k+1>(D_A(w)-d(w))+T_A(w)$.
+
+\begin{lemma}[Primitive templates suffice]\label{lem:primitive}
+If $v[0:p)=t^j$ with $j\ge2$, every rule $(A,v,w,k)$ with period $p$ is
+dominated by the rule $(A,v,w,jk)$ with period $\len t$.
+\end{lemma}
+
+\begin{proof}
+Both rules use the same text $A=t^\infty$, hence the same trigger and the
+same $B_A(w;m)$. Since $\len v-\len w=kp=(jk)\len t$, the second rule
+exists, and its bound $B_A(w;m)+jk+1$ is larger.
+\end{proof}
+
+\paragraph{Implementation and validation.}
+A prototype (\texttt{compact.py}) keeps $u$ in a forward and a reversed weighted
+trie and $d$ in a forward trie, built incrementally in decreasing length.
+Then $\lambda$ and $\rho$ are subtree sums, and $D_A$ is a single walk along $A$.
+For $T_A$, words $A[-\mu:n)c$ with the same start residue modulo $p$ are the same
+string, so $T_A(x)$ takes $p$ walks, each weighted by the number of admissible
+shifts. The prototype never builds $V$. On $4.6\times10^5$ random, periodic
+and Fibonacci-type instances it reproduced the reference implementation's $u$
+and $d$ exactly. It processes $2\times10^4$ reads of length $100$
+($L=2\times10^6$) in under 90\,s in pure Python, whereas the reference
+construction would have to enumerate about $2\times10^7$ distinct substrings there and evaluate blocking sums over them. The remaining costs are $O(\len s)$ trie navigation per
+word and the $T_A$ walks. Both should become amortized constant time per
+step using Aho--Corasick node identifiers and Fenwick trees over Euler tours.
+
+\end{document}
