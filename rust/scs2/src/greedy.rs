@@ -80,8 +80,16 @@ pub fn greedy_scs(strings: &[Word]) -> Word {
 /// Reorder the inputs by leftmost occurrence in the superstring `t` and merge consecutive strings
 /// with maximum overlap. The result is never longer than `t`.
 pub fn order_merge(t: &[Sym], strings: &[Word]) -> Word {
-    let s = reduce_instance(strings);
-    let ac = AhoCorasick::new(&s);
+    order_merge_reduced(t, &reduce_instance(strings))
+}
+
+/// `order_merge` for inputs already reduced (sorted, unique, substring-free).
+pub fn order_merge_reduced(t: &[Sym], s: &[Word]) -> Word {
+    order_merge_with(t, s, &AhoCorasick::new(s))
+}
+
+/// `order_merge_reduced` with a prebuilt automaton of `s`.
+pub fn order_merge_with(t: &[Sym], s: &[Word], ac: &AhoCorasick) -> Word {
     let mut first = vec![usize::MAX; s.len()];
     let mut v = 0u32;
     for (pos, &c) in t.iter().enumerate() {

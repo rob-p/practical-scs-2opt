@@ -62,7 +62,14 @@ fn main() {
             let t_counts = t.elapsed().as_secs_f64();
             let (s, st) = connect::superstring(&c);
             let t_connect = t.elapsed().as_secs_f64() - t_counts;
-            let om = greedy::order_merge(&s, &input);
+            let t_om = std::time::Instant::now();
+            let om = greedy::order_merge_with(&s, &c.strings, &c.trie);
+            if scs2::counts::tracing() {
+                eprintln!(
+                    "  [         order-merge] {:.2}s",
+                    t_om.elapsed().as_secs_f64()
+                );
+            }
             let dt = t.elapsed().as_secs_f64();
             println!(
                 "{{\"cmd\":\"solve\",\"n\":{},\"L\":{},\"W\":{},\"len\":{},\"len_om\":{},\"added\":{},\"groups\":{},\"layers\":{},\"blocks\":{},\"hard_cases\":{},\"requests\":{},\"cycles\":{},\"t_counts\":{:.3},\"t_connect\":{:.3},\"secs\":{:.3}}}",

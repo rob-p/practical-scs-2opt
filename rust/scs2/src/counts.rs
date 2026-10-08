@@ -44,6 +44,8 @@ pub struct Counts {
     pub d: Vec<(Occ, i64)>,
     pub w: i64,
     pub stats: CountStats,
+    /// Aho-Corasick automaton of `strings` (the forward trie F), reusable by later stages.
+    pub trie: AhoCorasick,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -65,12 +67,12 @@ impl Counts {
     }
 }
 
-fn tracing() -> bool {
+pub fn tracing() -> bool {
     static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *T.get_or_init(|| std::env::var_os("SCS2_TRACE").is_some())
 }
 
-fn trace(name: &str, t: &mut std::time::Instant) {
+pub fn trace(name: &str, t: &mut std::time::Instant) {
     if tracing() {
         eprintln!("  [{:>20}] {:.2}s", name, t.elapsed().as_secs_f64());
     }
@@ -713,11 +715,13 @@ pub fn compute_counts(input: &[Word]) -> Counts {
         d_out.iter().map(|x| x.1).sum::<i64>(),
         "unbalanced base graph"
     );
+    drop(st);
     Counts {
         strings,
         u: u_out,
         d: d_out,
         w,
         stats,
+        trie: f,
     }
 }

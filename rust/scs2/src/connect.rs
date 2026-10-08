@@ -11,7 +11,7 @@
 //!     candidate under Python's scan order (layer id, start, end, offset);
 //!   * primitive roots, extremal rotations and alignments use linear-time string algorithms.
 
-use crate::counts::{Counts, Occ};
+use crate::counts::{Counts, Occ, trace};
 use crate::strings::{BASE, Sym, Word, extend, mulmod, submod, sym_val};
 use rustc_hash::FxHashMap;
 
@@ -330,19 +330,23 @@ struct Base {
     /// up edges in Python insertion order: (child vertex, multiplicity)
     u: Vec<(usize, i64)>,
     d: Vec<(usize, i64)>,
+    /// parent vertex of each u edge's child, suffix vertex of each d edge's source (parallel to u, d)
+    u_par: Vec<usize>,
+    d_suf: Vec<usize>,
 }
 
 fn build_base(c: &Counts, hs: &crate::strings::SliceHasher) -> Base {
     let word = |o: &Occ| &c.strings[o.si as usize][o.a as usize..o.b as usize];
     // Python order: decreasing length, then lexicographic
+    use rayon::prelude::*;
     let mut u: Vec<(Occ, i64)> = c.u.clone();
-    u.sort_by(|x, y| {
+    u.par_sort_by(|x, y| {
         y.0.len()
             .cmp(&x.0.len())
             .then_with(|| word(&x.0).cmp(word(&y.0)))
     });
     let mut d: Vec<(Occ, i64)> = c.d.clone();
-    d.sort_by(|x, y| {
+    d.par_sort_by(|x, y| {
         y.0.len()
             .cmp(&x.0.len())
             .then_with(|| word(&x.0).cmp(word(&y.0)))
@@ -357,66 +361,42 @@ fn build_base(c: &Counts, hs: &crate::strings::SliceHasher) -> Base {
         })
     };
     let mut bu = Vec::with_capacity(u.len());
+    let mut u_par = Vec::with_capacity(u.len());
     for (o, k) in &u {
         let child = vid(*o);
-        vid(Occ { b: o.b - 1, ..*o });
+        u_par.push(vid(Occ { b: o.b - 1, ..*o }));
         bu.push((child, *k));
     }
     let mut bd = Vec::with_capacity(d.len());
+    let mut d_suf = Vec::with_capacity(d.len());
     for (o, k) in &d {
         let v = vid(*o);
-        vid(Occ { a: o.a + 1, ..*o });
+        d_suf.push(vid(Occ { a: o.a + 1, ..*o }));
         bd.push((v, *k));
     }
     Base {
         verts,
         u: bu,
         d: bd,
+        u_par,
+        d_suf,
     }
 }
 
 /// Closed-walk decomposition of the base graph exactly as `closed_walks` in connect.py.
 fn closed_walks(c: &Counts, base: &Base) -> Vec<Vec<usize>> {
     let nv = base.verts.len();
-    let key_to_id: FxHashMap<VKey, usize> = base
-        .verts
-        .iter()
-        .enumerate()
-        .map(|(i, v)| (v.key, i))
-        .collect();
-    let parent_of = |i: usize| -> usize {
-        let o = base.verts[i].occ;
-        let hs_key = |o: Occ| -> VKey {
-            let w = &c.strings[o.si as usize][o.a as usize..o.b as usize];
-            let mut h = 0;
-            for &s in w {
-                h = extend(h, s);
-            }
-            vkey(h, w.len())
-        };
-        key_to_id[&hs_key(Occ { b: o.b - 1, ..o })]
-    };
-    let suffix_of = |i: usize| -> usize {
-        let o = base.verts[i].occ;
-        let w = &c.strings[o.si as usize][o.a as usize + 1..o.b as usize];
-        let mut h = 0;
-        for &s in w {
-            h = extend(h, s);
-        }
-        key_to_id[&vkey(h, w.len())]
-    };
     let mut out_up: Vec<Vec<usize>> = vec![Vec::new(); nv];
-    for &(child, k) in &base.u {
-        let par = parent_of(child);
+    for (&(child, k), &par) in base.u.iter().zip(&base.u_par) {
         for _ in 0..k {
             out_up[par].push(child);
         }
     }
     let mut out_down: Vec<i64> = vec![0; nv];
     let mut suf: Vec<usize> = vec![usize::MAX; nv];
-    for &(v, k) in &base.d {
+    for (&(v, k), &sv) in base.d.iter().zip(&base.d_suf) {
         out_down[v] += k;
-        suf[v] = suffix_of(v);
+        suf[v] = sv;
     }
     let word = |i: usize| {
         let o = base.verts[i].occ;
@@ -426,12 +406,15 @@ fn closed_walks(c: &Counts, base: &Base) -> Vec<Vec<usize>> {
     let mut verts: Vec<usize> = (0..nv)
         .filter(|&i| !out_up[i].is_empty() || out_down[i] > 0)
         .collect();
-    verts.sort_by(|&x, &y| {
-        word(x)
-            .len()
-            .cmp(&word(y).len())
-            .then_with(|| word(x).cmp(word(y)))
-    });
+    {
+        use rayon::prelude::*;
+        verts.par_sort_by(|&x, &y| {
+            word(x)
+                .len()
+                .cmp(&word(y).len())
+                .then_with(|| word(x).cmp(word(y)))
+        });
+    }
     let mut walks = Vec::new();
     for &v0 in &verts {
         while out_down[v0] > 0 || !out_up[v0].is_empty() {
@@ -1110,10 +1093,14 @@ pub fn superstring(c: &Counts) -> (Word, ConnectStats) {
         return (Vec::new(), ConnectStats::default());
     }
     let maxlen = c.strings.iter().map(|s| s.len()).max().unwrap() as i64;
+    let mut tt = std::time::Instant::now();
     let hs = crate::strings::SliceHasher::new(&c.strings);
     let base = build_base(c, &hs);
+    trace("base graph", &mut tt);
     let walks = closed_walks(c, &base);
+    trace("closed walks", &mut tt);
     let (groups, layers) = build_layers(c, &base, &walks);
+    trace("layers", &mut tt);
     let pmax = groups.iter().map(|g| g.p).max().unwrap_or(1);
     let pow = Pow::new((2 * (pmax + maxlen) + 4) as usize);
     // prefix hashes of each group text over [0, p + maxlen]
@@ -1147,6 +1134,7 @@ pub fn superstring(c: &Counts) -> (Word, ConnectStats) {
         }
     }
     let nl = layers.len();
+    trace("window index", &mut tt);
     let w_total: i64 = c.w;
     let mut conn = Connector {
         groups: &groups,
@@ -1177,6 +1165,7 @@ pub fn superstring(c: &Counts) -> (Word, ConnectStats) {
         );
     }
     conn.open_cycles();
+    trace("groups + cycles", &mut tt);
     conn.stats.blocks = conn.blocks.len();
 
     // ---- final graph: base edges (Python order) then added walks ----
@@ -1225,50 +1214,78 @@ pub fn superstring(c: &Counts) -> (Word, ConnectStats) {
     }
     assert!(added <= w_total, "added cost {added} exceeds W = {w_total}");
     conn.stats.added = added;
+    trace("final graph", &mut tt);
 
     // ---- Euler tour from eps (Hierholzer, as euler_superstring in connect.py) ----
-    let mut out_up: FxHashMap<VKey, Vec<(VKey, Sym)>> = FxHashMap::default();
-    for &(child, parent, ch, k) in &g.up {
-        let lst = out_up.entry(parent).or_default();
-        for _ in 0..k {
-            lst.push((child, ch));
-        }
-    }
-    let mut down: FxHashMap<VKey, (i64, VKey)> = g
+    // integer vertex ids; up lists in CSR form preserving insertion order (popped from the end)
+    let mut vid: FxHashMap<VKey, u32> = FxHashMap::default();
+    vid.insert(0, 0);
+    let id_of = |k: VKey, vid: &mut FxHashMap<VKey, u32>| -> u32 {
+        let n = vid.len() as u32;
+        *vid.entry(k).or_insert(n)
+    };
+    let ups: Vec<(u32, u32, Sym, i64)> =
+        g.up.iter()
+            .map(|&(child, parent, ch, k)| (id_of(parent, &mut vid), id_of(child, &mut vid), ch, k))
+            .collect();
+    let downs: Vec<(u32, u32, i64)> = g
         .down
         .iter()
         .map(|(&v, &(k, first, len, h))| {
             let sh = submod(h, mulmod(sym_val(first), pow.get(len as usize - 1)));
-            (v, (k, vkey(sh, len as usize - 1)))
+            (
+                id_of(v, &mut vid),
+                id_of(vkey(sh, len as usize - 1), &mut vid),
+                k,
+            )
         })
         .collect();
-    let mut stack: Vec<(VKey, Sym, bool)> = vec![(0, 0, false)];
-    let mut circuit: Vec<(Sym, bool)> = Vec::new(); // (symbol, reached by an up step)
+    let nv = vid.len();
+    drop(vid);
+    let mut up_off = vec![0usize; nv + 1];
+    for &(par, _, _, k) in &ups {
+        up_off[par as usize + 1] += k as usize;
+    }
+    for i in 0..nv {
+        up_off[i + 1] += up_off[i];
+    }
+    let mut up_end = up_off.clone(); // fill pointer, then stack top (exclusive)
+    let mut up_dst: Vec<(u32, Sym)> = vec![(0, 0); up_off[nv]];
+    for &(par, child, ch, k) in &ups {
+        for _ in 0..k {
+            up_dst[up_end[par as usize]] = (child, ch);
+            up_end[par as usize] += 1;
+        }
+    }
+    let mut down_cnt = vec![0i64; nv];
+    let mut down_dst = vec![u32::MAX; nv];
+    for &(v, sv, k) in &downs {
+        down_cnt[v as usize] += k;
+        down_dst[v as usize] = sv;
+    }
+    let mut stack: Vec<(u32, Sym, bool)> = vec![(0, 0, false)];
+    let mut circuit: Vec<(Sym, bool)> = Vec::with_capacity(up_off[nv] * 2 + 1);
     while let Some(&(v, _, _)) = stack.last() {
-        let next = match down.get_mut(&v) {
-            Some(e) if e.0 > 0 => {
-                e.0 -= 1;
-                Some((e.1, 0, false))
-            }
-            _ => out_up
-                .get_mut(&v)
-                .and_then(|l| l.pop())
-                .map(|(ch, s)| (ch, s, true)),
-        };
-        match next {
-            Some(n) => stack.push(n),
-            None => {
-                let (_, s, up) = stack.pop().unwrap();
-                circuit.push((s, up));
-            }
+        let vu = v as usize;
+        if down_cnt[vu] > 0 {
+            down_cnt[vu] -= 1;
+            stack.push((down_dst[vu], 0, false));
+        } else if up_end[vu] > up_off[vu] {
+            up_end[vu] -= 1;
+            let (child, ch) = up_dst[up_end[vu]];
+            stack.push((child, ch, true));
+        } else {
+            let (_, s, up) = stack.pop().unwrap();
+            circuit.push((s, up));
         }
     }
     assert!(
-        down.values().all(|e| e.0 == 0) && out_up.values().all(|l| l.is_empty()),
+        down_cnt.iter().all(|&c| c == 0) && (0..nv).all(|i| up_end[i] == up_off[i]),
         "graph not connected"
     );
     circuit.reverse();
     let t: Word = circuit.iter().filter(|x| x.1).map(|x| x.0).collect();
     assert_eq!(t.len() as i64, w_total + added);
+    trace("euler tour", &mut tt);
     (t, conn.stats)
 }
