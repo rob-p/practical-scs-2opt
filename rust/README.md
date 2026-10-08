@@ -48,3 +48,23 @@ With 16 threads at 10^7 the time splits into counts (3.4-5.6 s, of which about 2
 sequential setup), connection phase and Euler tour (about 2 s, sequential) and order-merge
 (0.1 s). `SCS2_TRACE=1` prints the breakdown. The Python reference needs 80-100 s for the
 counts at 2·10^6.
+
+## Real data
+
+`scs/make_real_data.sh` extracts inputs from local copies of GENCODE v49 protein-coding transcripts
+(human; real sequence, isoforms share exons), reads simulated from those transcripts, and SEQC
+RNA-seq reads (real Illumina reads with sequencing errors and `N`). Same settings as above.
+
+| Input | n (reduced) | L | W | greedy | greedy time | ours | ours + order-merge | ours time (16 threads) | ours RSS | hard cases |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `gencode_tx_2000000` | 802 | 2,000,333 | 1,985,792 | 1.00000 | 0.20 s | 1.00137 | 1.00000 | 1.46 s | 640 MB | 0 |
+| `gencode_tx_10000000` | 3,728 | 10,001,916 | 9,885,614 | 1.00000 | 1.17 s | 1.00058 | 1.00000 | 7.54 s | 2991 MB | 0 |
+| `gencode_simreads_20000` | 17,345 | 2,000,000 | 597,614 | 1.00000 | 0.25 s | 1.00014 | 1.00001 | 1.08 s | 487 MB | 0 |
+| `gencode_simreads_100000` | 84,766 | 10,000,000 | 3,049,355 | 1.00000 | 2.54 s | 1.00003 | 1.00000 | 8.12 s | 2203 MB | 0 |
+| `seqc_reads_20000` | 19,735 | 2,000,000 | 1,604,510 | 1.00004 | 0.28 s | 1.00017 | 1.00008 | 1.44 s | 710 MB | 0 |
+| `seqc_reads_100000` | 95,419 | 10,000,000 | 6,984,207 | 1.00001 | 2.57 s | 1.00006 | 1.00004 | 9.06 s | 3464 MB | 1 |
+
+On these inputs greedy is already within 0.005% of the lower bound W, so neither algorithm has
+room to improve; ours certifies near-optimality, at 3.5-7x greedy's time. Periodic structure that
+forces the paper's period rule (hard cases) is essentially absent. That contrasts with the
+synthetic tandem-repeat genomes above, where greedy is 0.75-0.9% above W and ours reaches W.

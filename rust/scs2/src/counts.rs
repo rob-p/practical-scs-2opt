@@ -46,6 +46,103 @@ pub struct Counts {
     pub stats: CountStats,
     /// Aho-Corasick automaton of `strings` (the forward trie F), reusable by later stages.
     pub trie: AhoCorasick,
+    /// Word ids of the entries of `u` and `d` (see `WordIndex`).
+    pub u_ids: Vec<u32>,
+    pub d_ids: Vec<u32>,
+    pub words: WordIndex,
+}
+
+/// Word ids of P ∪ Q: a forward-trie node v is id v (0 is the empty word); a reversed-trie node
+/// rn is the id of its paired forward node if the word is in P, else nf + rn.
+pub struct WordIndex {
+    pub nf: usize,
+    pub rtrie: AhoCorasick,
+    pub f2r: Vec<u32>,
+    pub r2f: Vec<u32>,
+    /// position in `strings` of each pattern of the reversed trie
+    pub rorder: Vec<u32>,
+}
+
+impl WordIndex {
+    pub fn num_ids(&self) -> usize {
+        self.nf + self.rtrie.num_nodes()
+    }
+    #[inline]
+    pub fn rid(&self, rn: u32) -> u32 {
+        if rn == 0 {
+            0
+        } else if self.r2f[rn as usize] != NONE {
+            self.r2f[rn as usize]
+        } else {
+            (self.nf + rn as usize) as u32
+        }
+    }
+    #[inline]
+    pub fn len(&self, f: &AhoCorasick, id: u32) -> usize {
+        let id = id as usize;
+        if id < self.nf {
+            f.depth[id] as usize
+        } else {
+            self.rtrie.depth[id - self.nf] as usize
+        }
+    }
+    pub fn occ(&self, f: &AhoCorasick, strings: &[Word], id: u32) -> Occ {
+        let id = id as usize;
+        if id < self.nf {
+            Occ {
+                si: f.lo[id],
+                a: 0,
+                b: f.depth[id],
+            }
+        } else {
+            let rn = id - self.nf;
+            let si = self.rorder[self.rtrie.lo[rn] as usize];
+            let n = strings[si as usize].len() as u32;
+            Occ {
+                si,
+                a: n - self.rtrie.depth[rn],
+                b: n,
+            }
+        }
+    }
+    /// Id of s[1:] for a word s in Q.
+    #[inline]
+    pub fn suffix_id(&self, id: u32) -> u32 {
+        let rn = if (id as usize) < self.nf {
+            self.f2r[id as usize]
+        } else {
+            id - self.nf as u32
+        };
+        debug_assert_ne!(rn, NONE);
+        self.rid(self.rtrie.parent[rn as usize])
+    }
+    /// Id of a word given by its symbols, if it is in P ∪ Q.
+    pub fn lookup(
+        &self,
+        f: &AhoCorasick,
+        w: impl DoubleEndedIterator<Item = Sym> + Clone,
+    ) -> Option<u32> {
+        let mut v = 0u32;
+        let mut ok = true;
+        for c in w.clone() {
+            v = f.child(v, c);
+            if v == NONE {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return Some(v);
+        }
+        let mut rn = 0u32;
+        for c in w.rev() {
+            rn = self.rtrie.child(rn, c);
+            if rn == NONE {
+                return None;
+            }
+        }
+        Some(self.rid(rn))
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -546,6 +643,8 @@ pub fn compute_counts(input: &[Word]) -> Counts {
     let mut pending: FxHashMap<u32, Vec<(Occ, u64, i64)>> = FxHashMap::default();
     let mut u_out = Vec::new();
     let mut d_out = Vec::new();
+    let mut u_ids: Vec<u32> = Vec::new();
+    let mut d_ids: Vec<u32> = Vec::new();
     let mut stats = CountStats {
         words: order.len(),
         ..Default::default()
@@ -616,9 +715,11 @@ pub fn compute_counts(input: &[Word]) -> Counts {
             let o = res.occ;
             if res.us > 0 {
                 u_out.push((o, res.us));
+                u_ids.push(res.id);
             }
             if res.ds > 0 {
                 d_out.push((o, res.ds));
+                d_ids.push(res.id);
                 let h = if res.h != 0 {
                     res.h
                 } else {
@@ -716,6 +817,13 @@ pub fn compute_counts(input: &[Word]) -> Counts {
         "unbalanced base graph"
     );
     drop(st);
+    let words = WordIndex {
+        nf,
+        rtrie: r,
+        f2r,
+        r2f,
+        rorder,
+    };
     Counts {
         strings,
         u: u_out,
@@ -723,5 +831,8 @@ pub fn compute_counts(input: &[Word]) -> Counts {
         w,
         stats,
         trie: f,
+        u_ids,
+        d_ids,
+        words,
     }
 }

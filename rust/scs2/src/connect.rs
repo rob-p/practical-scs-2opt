@@ -11,8 +11,8 @@
 //!     candidate under Python's scan order (layer id, start, end, offset);
 //!   * primitive roots, extremal rotations and alignments use linear-time string algorithms.
 
-use crate::counts::{Counts, Occ, trace};
-use crate::strings::{BASE, Sym, Word, extend, mulmod, submod, sym_val};
+use crate::counts::{Counts, trace};
+use crate::strings::{BASE, Sym, Word, extend, mulmod, submod};
 use rustc_hash::FxHashMap;
 
 // ---------------------------------------------------------------------------------------------
@@ -137,117 +137,54 @@ fn cyclic_root_len(s: &[Sym]) -> usize {
 // Edges and walks
 // ---------------------------------------------------------------------------------------------
 
-/// An edge of the hierarchical graph, by vertex keys.
-#[derive(Clone, Copy, Debug)]
-pub enum Edge {
-    /// up edge parent -> child = parent·c; `first` is the child's first symbol
-    Up {
-        child: VKey,
-        parent: VKey,
-        c: Sym,
-        first: Sym,
-        len: u32,
-    },
-    /// down edge v -> suf(v); `first` is v's first symbol
-    Down {
-        v: VKey,
-        first: Sym,
-        len: u32,
-        h: u64,
-    },
+/// An edge of the hierarchical graph, given by a window of a periodic text: an up edge into the
+/// word text[x:e) from text[x:e-1), or a down edge from text[x:e) to text[x+1:e).
+#[derive(Clone)]
+pub struct Edge {
+    pub up: bool,
+    pub text: Text,
+    pub x: i64,
+    pub e: i64,
 }
 
-struct Walker<'a> {
-    pow: &'a Pow,
-}
+struct Walker;
 
-impl Walker<'_> {
+impl Walker {
     /// Edges of the path from window [a,b) to [c,d) in `text` (Lemma 4.1), appended to `out`.
     fn path(&self, text: &Text, a: i64, b: i64, c: i64, d: i64, out: &mut Vec<Edge>) {
         assert!(a <= c && b <= d, "unordered windows {a} {b} {c} {d}");
-        let mut h = text.hash(a, b);
-        let mut x = a;
-        let down = |h: &mut u64, x: &mut i64, end: i64, out: &mut Vec<Edge>| {
-            let len = (end - *x) as usize;
-            let first = text.ch(*x);
-            out.push(Edge::Down {
-                v: vkey(*h, len),
-                first,
-                len: len as u32,
-                h: *h,
-            });
-            *h = submod(*h, mulmod(sym_val(first), self.pow.get(len - 1)));
-            *x += 1;
+        let mk = |up: bool, x: i64, e: i64| Edge {
+            up,
+            text: text.clone(),
+            x,
+            e,
         };
         if c <= b {
-            while x < c {
-                down(&mut h, &mut x, b, out);
+            for x in a..c {
+                out.push(mk(false, x, b));
             }
-            let first = if c < b { text.ch(c) } else { 0 };
             for y in b..d {
-                let ch = text.ch(y);
-                let nh = extend(h, ch);
-                let len = (y + 1 - c) as usize;
-                let f = if len == 1 { ch } else { first };
-                out.push(Edge::Up {
-                    child: vkey(nh, len),
-                    parent: vkey(h, len - 1),
-                    c: ch,
-                    first: f,
-                    len: len as u32,
-                });
-                h = nh;
+                out.push(mk(true, c, y + 1));
             }
         } else {
-            while x < b {
-                down(&mut h, &mut x, b, out);
+            for x in a..b {
+                out.push(mk(false, x, b));
             }
             for y in b..c {
-                let ch = text.ch(y);
-                let nh = extend(0, ch);
-                out.push(Edge::Up {
-                    child: vkey(nh, 1),
-                    parent: 0,
-                    c: ch,
-                    first: ch,
-                    len: 1,
-                });
-                out.push(Edge::Down {
-                    v: vkey(nh, 1),
-                    first: ch,
-                    len: 1,
-                    h: nh,
-                });
+                out.push(mk(true, y, y + 1));
+                out.push(mk(false, y, y + 1));
             }
-            let first = text.ch(c);
-            let mut h = 0u64;
             for y in c..d {
-                let ch = text.ch(y);
-                let nh = extend(h, ch);
-                let len = (y + 1 - c) as usize;
-                out.push(Edge::Up {
-                    child: vkey(nh, len),
-                    parent: vkey(h, len - 1),
-                    c: ch,
-                    first,
-                    len: len as u32,
-                });
-                h = nh;
+                out.push(mk(true, c, y + 1));
             }
         }
     }
 
     /// Follow an ordered list of windows whose first and last spell the same word.
     fn closed_list(&self, text: &Text, wins: &[(i64, i64)]) -> Vec<Edge> {
-        debug_assert_eq!(
-            vkey(
-                text.hash(wins[0].0, wins[0].1),
-                (wins[0].1 - wins[0].0) as usize
-            ),
-            vkey(
-                text.hash(wins[wins.len() - 1].0, wins[wins.len() - 1].1),
-                (wins[wins.len() - 1].1 - wins[wins.len() - 1].0) as usize
-            )
+        let (f, l) = (wins[0], wins[wins.len() - 1]);
+        debug_assert!(
+            f.1 - f.0 == l.1 - l.0 && (0..f.1 - f.0).all(|i| text.ch(f.0 + i) == text.ch(l.0 + i))
         );
         let mut out = Vec::new();
         for w in wins.windows(2) {
@@ -268,10 +205,7 @@ impl Walker<'_> {
 }
 
 fn up_cost(edges: &[Edge]) -> i64 {
-    edges
-        .iter()
-        .filter(|e| matches!(e, Edge::Up { .. }))
-        .count() as i64
+    edges.iter().filter(|e| e.up).count() as i64
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -318,118 +252,98 @@ pub struct Group {
     pub t: i64,
 }
 
-/// A base-graph vertex: its word as an occurrence in the inputs.
-#[derive(Clone, Copy)]
-struct BVert {
-    occ: Occ,
-    key: VKey,
-}
-
+/// Base graph on word ids (see `WordIndex`): up edges pref(s) -> s and down edges s -> suf(s).
 struct Base {
-    verts: Vec<BVert>,
-    /// up edges in Python insertion order: (child vertex, multiplicity)
-    u: Vec<(usize, i64)>,
-    d: Vec<(usize, i64)>,
-    /// parent vertex of each u edge's child, suffix vertex of each d edge's source (parallel to u, d)
-    u_par: Vec<usize>,
-    d_suf: Vec<usize>,
+    /// up edges in Python insertion order (decreasing length, then lexicographic):
+    /// (child id, multiplicity)
+    u: Vec<(u32, i64)>,
+    /// down edges: (source id, multiplicity)
+    d: Vec<(u32, i64)>,
 }
 
-fn build_base(c: &Counts, hs: &crate::strings::SliceHasher) -> Base {
-    let word = |o: &Occ| &c.strings[o.si as usize][o.a as usize..o.b as usize];
-    // Python order: decreasing length, then lexicographic
+fn build_base(c: &Counts) -> Base {
     use rayon::prelude::*;
-    let mut u: Vec<(Occ, i64)> = c.u.clone();
-    u.par_sort_by(|x, y| {
-        y.0.len()
-            .cmp(&x.0.len())
-            .then_with(|| word(&x.0).cmp(word(&y.0)))
-    });
-    let mut d: Vec<(Occ, i64)> = c.d.clone();
-    d.par_sort_by(|x, y| {
-        y.0.len()
-            .cmp(&x.0.len())
-            .then_with(|| word(&x.0).cmp(word(&y.0)))
-    });
-    let mut ids: FxHashMap<VKey, usize> = FxHashMap::default();
-    let mut verts: Vec<BVert> = Vec::new();
-    let mut vid = |o: Occ| -> usize {
-        let key = vkey(hs.hash(o.si as usize, o.a as usize, o.b as usize), o.len());
-        *ids.entry(key).or_insert_with(|| {
-            verts.push(BVert { occ: o, key });
-            verts.len() - 1
-        })
-    };
-    let mut bu = Vec::with_capacity(u.len());
-    let mut u_par = Vec::with_capacity(u.len());
-    for (o, k) in &u {
-        let child = vid(*o);
-        u_par.push(vid(Occ { b: o.b - 1, ..*o }));
-        bu.push((child, *k));
-    }
-    let mut bd = Vec::with_capacity(d.len());
-    let mut d_suf = Vec::with_capacity(d.len());
-    for (o, k) in &d {
-        let v = vid(*o);
-        d_suf.push(vid(Occ { a: o.a + 1, ..*o }));
-        bd.push((v, *k));
-    }
-    Base {
-        verts,
-        u: bu,
-        d: bd,
-        u_par,
-        d_suf,
-    }
+    let f = &c.trie;
+    // same-length forward-trie nodes are numbered in lexicographic order
+    let mut u: Vec<(u32, i64)> = c
+        .u_ids
+        .iter()
+        .copied()
+        .zip(c.u.iter().map(|x| x.1))
+        .collect();
+    u.par_sort_unstable_by_key(|&(id, _)| (std::cmp::Reverse(f.depth[id as usize]), id));
+    let d: Vec<(u32, i64)> = c
+        .d_ids
+        .iter()
+        .copied()
+        .zip(c.d.iter().map(|x| x.1))
+        .collect();
+    Base { u, d }
+}
+
+/// Symbols of a word id.
+fn word_of<'a>(c: &'a Counts, id: u32) -> &'a [Sym] {
+    let o = c.words.occ(&c.trie, &c.strings, id);
+    &c.strings[o.si as usize][o.a as usize..o.b as usize]
 }
 
 /// Closed-walk decomposition of the base graph exactly as `closed_walks` in connect.py.
-fn closed_walks(c: &Counts, base: &Base) -> Vec<Vec<usize>> {
-    let nv = base.verts.len();
-    let mut out_up: Vec<Vec<usize>> = vec![Vec::new(); nv];
-    for (&(child, k), &par) in base.u.iter().zip(&base.u_par) {
+fn closed_walks(c: &Counts, base: &Base) -> Vec<Vec<u32>> {
+    use rayon::prelude::*;
+    let f = &c.trie;
+    let nv = c.words.num_ids();
+    // out_up in CSR form, filled in u order; popped from the end
+    let mut off = vec![0usize; nv + 1];
+    for &(child, k) in &base.u {
+        off[f.parent[child as usize] as usize + 1] += k as usize;
+    }
+    for i in 0..nv {
+        off[i + 1] += off[i];
+    }
+    let mut top = off.clone();
+    let mut dst = vec![0u32; off[nv]];
+    for &(child, k) in &base.u {
+        let par = f.parent[child as usize] as usize;
         for _ in 0..k {
-            out_up[par].push(child);
+            dst[top[par]] = child;
+            top[par] += 1;
         }
     }
-    let mut out_down: Vec<i64> = vec![0; nv];
-    let mut suf: Vec<usize> = vec![usize::MAX; nv];
-    for (&(v, k), &sv) in base.d.iter().zip(&base.d_suf) {
-        out_down[v] += k;
-        suf[v] = sv;
+    let mut out_down = vec![0i64; nv];
+    for &(v, k) in &base.d {
+        out_down[v as usize] += k;
     }
-    let word = |i: usize| {
-        let o = base.verts[i].occ;
-        &c.strings[o.si as usize][o.a as usize..o.b as usize]
-    };
-    // Python: verts = keys of out_up (parents) | keys of out_down
-    let mut verts: Vec<usize> = (0..nv)
-        .filter(|&i| !out_up[i].is_empty() || out_down[i] > 0)
+    // Python: start vertices = parents of up edges and sources of down edges, by (len, word)
+    let mut verts: Vec<u32> = (0..nv as u32)
+        .into_par_iter()
+        .filter(|&i| top[i as usize] > off[i as usize] || out_down[i as usize] > 0)
         .collect();
-    {
-        use rayon::prelude::*;
-        verts.par_sort_by(|&x, &y| {
-            word(x)
-                .len()
-                .cmp(&word(y).len())
-                .then_with(|| word(x).cmp(word(y)))
-        });
-    }
+    let nf = c.words.nf as u32;
+    verts.par_sort_unstable_by(|&x, &y| {
+        let (lx, ly) = (c.words.len(f, x), c.words.len(f, y));
+        lx.cmp(&ly).then_with(|| {
+            if x < nf && y < nf {
+                x.cmp(&y)
+            } else {
+                word_of(c, x).cmp(word_of(c, y))
+            }
+        })
+    });
     let mut walks = Vec::new();
     for &v0 in &verts {
-        while out_down[v0] > 0 || !out_up[v0].is_empty() {
+        while out_down[v0 as usize] > 0 || top[v0 as usize] > off[v0 as usize] {
             let mut stack = vec![v0];
             let mut circuit = Vec::new();
             while let Some(&v) = stack.last() {
-                let w = if out_down[v] > 0 {
-                    out_down[v] -= 1;
-                    Some(suf[v])
+                let vu = v as usize;
+                if out_down[vu] > 0 {
+                    out_down[vu] -= 1;
+                    stack.push(c.words.suffix_id(v));
+                } else if top[vu] > off[vu] {
+                    top[vu] -= 1;
+                    stack.push(dst[top[vu]]);
                 } else {
-                    out_up[v].pop()
-                };
-                match w {
-                    Some(w) => stack.push(w),
-                    None => circuit.push(stack.pop().unwrap()),
+                    circuit.push(stack.pop().unwrap());
                 }
             }
             circuit.reverse();
@@ -439,24 +353,22 @@ fn closed_walks(c: &Counts, base: &Base) -> Vec<Vec<usize>> {
     walks
 }
 
-fn build_layers(c: &Counts, base: &Base, walks: &[Vec<usize>]) -> (Vec<Group>, Vec<Layer>) {
-    let word = |i: usize| {
-        let o = base.verts[i].occ;
-        &c.strings[o.si as usize][o.a as usize..o.b as usize]
-    };
+fn build_layers(c: &Counts, walks: &[Vec<u32>]) -> (Vec<Group>, Vec<Layer>) {
+    let f = &c.trie;
     // canon -> list of (P, Z, s), in walk order; groups keyed by canonical primitive rotation
     let mut by_root: FxHashMap<Vec<Sym>, Vec<(i64, Vec<i64>, i64)>> = FxHashMap::default();
     let mut root_order: Vec<Vec<Sym>> = Vec::new();
     for circ in walks {
-        let len0 = word(circ[0]).len() as i64;
+        let len0 = c.words.len(f, circ[0]) as i64;
         let mut x = 0i64;
         let mut letters: Vec<Sym> = Vec::new();
         let mut z: Vec<i64> = Vec::new();
         let mut e = len0;
         for pair in circ.windows(2) {
-            let (wa, wb) = (word(pair[0]), word(pair[1]));
-            if wb.len() == wa.len() + 1 {
-                letters.push(*wb.last().unwrap());
+            let (la, lb) = (c.words.len(f, pair[0]), c.words.len(f, pair[1]));
+            if lb == la + 1 {
+                // up steps reach forward-trie nodes; the appended symbol labels the node
+                letters.push(f.sym[pair[1] as usize]);
                 e += 1;
             } else {
                 z.push(e);
@@ -568,15 +480,15 @@ pub struct ConnectStats {
 struct Connector<'a> {
     groups: &'a [Group],
     layers: &'a [Layer],
-    w: Walker<'a>,
+    w: Walker,
     walks: Vec<Vec<Edge>>,
     rooted: Vec<bool>,
     blocks: Vec<Block>,
     block_of: Vec<usize>,
     /// host layer -> child requests in insertion order of child group
     requests: Vec<Vec<Request>>,
-    /// layer windows by word key: (layer id, x, e), in Python scan order per key
-    win_index: FxHashMap<VKey, Vec<(u32, i64, i64)>>,
+    /// layer windows (word key, layer id, x, e), sorted; built on the first record search
+    win_index: std::cell::OnceCell<Vec<(VKey, u32, i64, i64)>>,
     /// per group: prefix hashes of its text over [0, p + maxlen]
     gph: Vec<Vec<u64>>,
     pow: &'a Pow,
@@ -610,14 +522,16 @@ impl Connector<'_> {
     /// Record search (Section 5.3): minimum admissible (layer, x, e, offset) as in Python.
     fn find_record(&self, g: usize, w_lo: i64, w_hi: i64) -> (usize, i64, (i64, i64)) {
         let a_text = &self.groups[g].text;
+        let index = self.win_index.get_or_init(|| self.build_window_index());
         let mut best: Option<(u32, i64, i64, i64, i64)> = None; // (D, x, e, o, delta)
         let maxlen = self.maxlen;
         for a in (w_hi - maxlen).max(w_lo - maxlen)..=w_lo {
             let mut b = w_hi;
             while b - a <= maxlen {
                 let key = vkey(self.ghash(g, a, b), (b - a) as usize);
-                if let Some(list) = self.win_index.get(&key) {
-                    for &(d, x, e) in list {
+                let lo = index.partition_point(|w| w.0 < key);
+                {
+                    for &(_, d, x, e) in index[lo..].iter().take_while(|w| w.0 == key) {
                         if e - x != b - a {
                             continue;
                         }
@@ -641,6 +555,26 @@ impl Connector<'_> {
         }
         let (d, x, e, _, delta) = best.expect("count rule guarantees a record; none found");
         (d as usize, delta, (x + delta, e + delta))
+    }
+
+    /// All layer windows (one period per layer) keyed by word, sorted by (key, layer, x, e).
+    fn build_window_index(&self) -> Vec<(VKey, u32, i64, i64)> {
+        let mut idx = Vec::new();
+        for l in self.layers {
+            let ph = &self.gph[l.group];
+            for x in 0..l.p {
+                for e in l.f(x)..=l.l(x) {
+                    let h = submod(
+                        ph[e as usize],
+                        mulmod(ph[x as usize], self.pow.get((e - x) as usize)),
+                    );
+                    idx.push((vkey(h, (e - x) as usize), l.id as u32, x, e));
+                }
+            }
+        }
+        use rayon::prelude::*;
+        idx.par_sort_unstable();
+        idx
     }
 
     fn band_join(&self, g: usize, ls: &[usize], t: i64, h: i64) -> Vec<Edge> {
@@ -1065,28 +999,77 @@ impl Connector<'_> {
 // Driver and Euler tour (Section 7)
 // ---------------------------------------------------------------------------------------------
 
-/// Ordered multiset of up edges (insertion order of first occurrence) and down-edge counts.
-struct Graph {
-    up_index: FxHashMap<VKey, usize>,
-    /// (child, parent, appended symbol, count)
-    up: Vec<(VKey, VKey, Sym, i64)>,
-    down: FxHashMap<VKey, (i64, Sym, u32, u64)>,
+/// Final graph on word ids: base vertices use `WordIndex` ids, other vertices visited by added
+/// walks get ids after them.
+struct Final<'a> {
+    c: &'a Counts,
+    nbase: u32,
+    extra: FxHashMap<VKey, u32>,
+    /// up edges in Python insertion order: (child, parent, appended symbol, multiplicity)
+    up: Vec<(u32, u32, Sym, i64)>,
+    up_pos_base: Vec<u32>,
+    up_pos_extra: FxHashMap<u32, usize>,
+    /// down edges: source -> (multiplicity, suffix)
+    down: Vec<(i64, u32)>,
+    down_extra: FxHashMap<u32, (i64, u32)>,
 }
 
-impl Graph {
-    fn add_up(&mut self, child: VKey, parent: VKey, c: Sym, k: i64) {
-        match self.up_index.get(&child) {
-            Some(&i) => self.up[i].3 += k,
+impl Final<'_> {
+    /// Id of the word text[x:e).
+    fn resolve(&mut self, text: &Text, x: i64, e: i64) -> u32 {
+        if e == x {
+            return 0;
+        }
+        if let Some(id) = self
+            .c
+            .words
+            .lookup(&self.c.trie, (x..e).map(|i| text.ch(i)))
+        {
+            return id;
+        }
+        let key = vkey(text.hash(x, e), (e - x) as usize);
+        let n = self.nbase + self.extra.len() as u32;
+        *self.extra.entry(key).or_insert(n)
+    }
+
+    fn add_up(&mut self, child: u32, parent: u32, ch: Sym, k: i64) {
+        let pos = if child < self.nbase {
+            let p = self.up_pos_base[child as usize];
+            if p == NONE_U32 {
+                None
+            } else {
+                Some(p as usize)
+            }
+        } else {
+            self.up_pos_extra.get(&child).copied()
+        };
+        match pos {
+            Some(i) => self.up[i].3 += k,
             None => {
-                self.up_index.insert(child, self.up.len());
-                self.up.push((child, parent, c, k));
+                let i = self.up.len();
+                if child < self.nbase {
+                    self.up_pos_base[child as usize] = i as u32;
+                } else {
+                    self.up_pos_extra.insert(child, i);
+                }
+                self.up.push((child, parent, ch, k));
             }
         }
     }
-    fn add_down(&mut self, v: VKey, first: Sym, len: u32, h: u64, k: i64) {
-        self.down.entry(v).or_insert((0, first, len, h)).0 += k;
+
+    fn add_down(&mut self, v: u32, suf: u32, k: i64) {
+        if v < self.nbase {
+            let e = &mut self.down[v as usize];
+            e.0 += k;
+            e.1 = suf;
+        } else {
+            let e = self.down_extra.entry(v).or_insert((0, suf));
+            e.0 += k;
+        }
     }
 }
+
+const NONE_U32: u32 = u32::MAX;
 
 pub fn superstring(c: &Counts) -> (Word, ConnectStats) {
     if c.strings.is_empty() {
@@ -1094,12 +1077,12 @@ pub fn superstring(c: &Counts) -> (Word, ConnectStats) {
     }
     let maxlen = c.strings.iter().map(|s| s.len()).max().unwrap() as i64;
     let mut tt = std::time::Instant::now();
-    let hs = crate::strings::SliceHasher::new(&c.strings);
-    let base = build_base(c, &hs);
+    let base = build_base(c);
     trace("base graph", &mut tt);
     let walks = closed_walks(c, &base);
     trace("closed walks", &mut tt);
-    let (groups, layers) = build_layers(c, &base, &walks);
+    let (groups, layers) = build_layers(c, &walks);
+    drop(walks);
     trace("layers", &mut tt);
     let pmax = groups.iter().map(|g| g.p).max().unwrap_or(1);
     let pow = Pow::new((2 * (pmax + maxlen) + 4) as usize);
@@ -1116,36 +1099,18 @@ pub fn superstring(c: &Counts) -> (Word, ConnectStats) {
             v
         })
         .collect();
-    // index of layer windows (one period per layer), in Python scan order
-    let mut win_index: FxHashMap<VKey, Vec<(u32, i64, i64)>> = FxHashMap::default();
-    for l in &layers {
-        let ph = &gph[l.group];
-        for x in 0..l.p {
-            for e in l.f(x)..=l.l(x) {
-                let h = submod(
-                    ph[e as usize],
-                    mulmod(ph[x as usize], pow.get((e - x) as usize)),
-                );
-                win_index
-                    .entry(vkey(h, (e - x) as usize))
-                    .or_default()
-                    .push((l.id as u32, x, e));
-            }
-        }
-    }
     let nl = layers.len();
-    trace("window index", &mut tt);
     let w_total: i64 = c.w;
     let mut conn = Connector {
         groups: &groups,
         layers: &layers,
-        w: Walker { pow: &pow },
+        w: Walker,
         walks: Vec::new(),
         rooted: vec![false; nl],
         blocks: Vec::new(),
         block_of: vec![usize::MAX; nl],
         requests: vec![Vec::new(); nl],
-        win_index,
+        win_index: std::cell::OnceCell::new(),
         gph,
         pow: &pow,
         maxlen,
@@ -1165,85 +1130,68 @@ pub fn superstring(c: &Counts) -> (Word, ConnectStats) {
         );
     }
     conn.open_cycles();
-    trace("groups + cycles", &mut tt);
     conn.stats.blocks = conn.blocks.len();
+    trace("groups + cycles", &mut tt);
 
     // ---- final graph: base edges (Python order) then added walks ----
-    let mut g = Graph {
-        up_index: FxHashMap::default(),
-        up: Vec::new(),
-        down: FxHashMap::default(),
+    let f = &c.trie;
+    let nbase = c.words.num_ids() as u32;
+    let mut g = Final {
+        c,
+        nbase,
+        extra: FxHashMap::default(),
+        up: Vec::with_capacity(base.u.len()),
+        up_pos_base: vec![NONE_U32; nbase as usize],
+        up_pos_extra: FxHashMap::default(),
+        down: vec![(0, 0); nbase as usize],
+        down_extra: FxHashMap::default(),
     };
     for &(v, k) in &base.u {
-        let o = base.verts[v].occ;
-        let par = vkey(
-            hs.hash(o.si as usize, o.a as usize, o.b as usize - 1),
-            o.len() - 1,
-        );
-        let last = c.strings[o.si as usize][o.b as usize - 1];
-        g.add_up(base.verts[v].key, par, last, k);
+        g.add_up(v, f.parent[v as usize], f.sym[v as usize], k);
     }
     for &(v, k) in &base.d {
-        let o = base.verts[v].occ;
-        let first = c.strings[o.si as usize][o.a as usize];
-        let h = hs.hash(o.si as usize, o.a as usize, o.b as usize);
-        g.add_down(base.verts[v].key, first, o.len() as u32, h, k);
+        g.add_down(v, c.words.suffix_id(v), k);
     }
     let mut added = 0i64;
     for walk in &conn.walks {
-        let mut bal: FxHashMap<VKey, i64> = FxHashMap::default();
+        let mut bal: FxHashMap<u32, i64> = FxHashMap::default();
         for e in walk {
-            match *e {
-                Edge::Up {
-                    child, parent, c, ..
-                } => {
-                    g.add_up(child, parent, c, 1);
-                    *bal.entry(parent).or_insert(0) -= 1;
-                    *bal.entry(child).or_insert(0) += 1;
-                    added += 1;
-                }
-                Edge::Down { v, first, len, h } => {
-                    g.add_down(v, first, len, h, 1);
-                    let sh = submod(h, mulmod(sym_val(first), pow.get(len as usize - 1)));
-                    *bal.entry(v).or_insert(0) -= 1;
-                    *bal.entry(vkey(sh, len as usize - 1)).or_insert(0) += 1;
-                }
+            if e.up {
+                let child = g.resolve(&e.text, e.x, e.e);
+                let parent = g.resolve(&e.text, e.x, e.e - 1);
+                g.add_up(child, parent, e.text.ch(e.e - 1), 1);
+                *bal.entry(parent).or_insert(0) -= 1;
+                *bal.entry(child).or_insert(0) += 1;
+                added += 1;
+            } else {
+                let v = g.resolve(&e.text, e.x, e.e);
+                let sv = g.resolve(&e.text, e.x + 1, e.e);
+                g.add_down(v, sv, 1);
+                *bal.entry(v).or_insert(0) -= 1;
+                *bal.entry(sv).or_insert(0) += 1;
             }
         }
         assert!(bal.values().all(|&x| x == 0), "added walk is not closed");
     }
     assert!(added <= w_total, "added cost {added} exceeds W = {w_total}");
     conn.stats.added = added;
+    drop(base);
     trace("final graph", &mut tt);
 
     // ---- Euler tour from eps (Hierholzer, as euler_superstring in connect.py) ----
-    // integer vertex ids; up lists in CSR form preserving insertion order (popped from the end)
-    let mut vid: FxHashMap<VKey, u32> = FxHashMap::default();
-    vid.insert(0, 0);
-    let id_of = |k: VKey, vid: &mut FxHashMap<VKey, u32>| -> u32 {
-        let n = vid.len() as u32;
-        *vid.entry(k).or_insert(n)
-    };
-    let ups: Vec<(u32, u32, Sym, i64)> =
-        g.up.iter()
-            .map(|&(child, parent, ch, k)| (id_of(parent, &mut vid), id_of(child, &mut vid), ch, k))
-            .collect();
-    let downs: Vec<(u32, u32, i64)> = g
-        .down
-        .iter()
-        .map(|(&v, &(k, first, len, h))| {
-            let sh = submod(h, mulmod(sym_val(first), pow.get(len as usize - 1)));
-            (
-                id_of(v, &mut vid),
-                id_of(vkey(sh, len as usize - 1), &mut vid),
-                k,
-            )
-        })
-        .collect();
-    let nv = vid.len();
-    drop(vid);
+    let nv = (nbase as usize) + g.extra.len();
+    let mut down_cnt = vec![0i64; nv];
+    let mut down_dst = vec![0u32; nv];
+    for (v, &(k, sv)) in g.down.iter().enumerate() {
+        down_cnt[v] = k;
+        down_dst[v] = sv;
+    }
+    for (&v, &(k, sv)) in &g.down_extra {
+        down_cnt[v as usize] = k;
+        down_dst[v as usize] = sv;
+    }
     let mut up_off = vec![0usize; nv + 1];
-    for &(par, _, _, k) in &ups {
+    for &(_, par, _, k) in &g.up {
         up_off[par as usize + 1] += k as usize;
     }
     for i in 0..nv {
@@ -1251,18 +1199,13 @@ pub fn superstring(c: &Counts) -> (Word, ConnectStats) {
     }
     let mut up_end = up_off.clone(); // fill pointer, then stack top (exclusive)
     let mut up_dst: Vec<(u32, Sym)> = vec![(0, 0); up_off[nv]];
-    for &(par, child, ch, k) in &ups {
+    for &(child, par, ch, k) in &g.up {
         for _ in 0..k {
             up_dst[up_end[par as usize]] = (child, ch);
             up_end[par as usize] += 1;
         }
     }
-    let mut down_cnt = vec![0i64; nv];
-    let mut down_dst = vec![u32::MAX; nv];
-    for &(v, sv, k) in &downs {
-        down_cnt[v as usize] += k;
-        down_dst[v as usize] = sv;
-    }
+    drop(g);
     let mut stack: Vec<(u32, Sym, bool)> = vec![(0, 0, false)];
     let mut circuit: Vec<(Sym, bool)> = Vec::with_capacity(up_off[nv] * 2 + 1);
     while let Some(&(v, _, _)) = stack.last() {
