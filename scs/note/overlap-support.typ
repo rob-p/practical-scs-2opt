@@ -493,7 +493,7 @@ Same-length nodes of $F$ are numbered in lexicographic order. Hence the edge ord
 The test suite generates fixtures with the Python reference: 3,712 small instances (random, periodic, Fibonacci-type and greedy's bad family, including non-ASCII alphabets) and $64$ medium repeat-rich read sets with 52,300 reads in total. On all of them the Rust implementation reproduces $u$, $d$ and $W$, greedy's output and the 2-approximation's superstring character for character. Altering the Euler-tour order changes 2,119 of the 3,712 superstrings, and altering a rule bound changes 2,155 count vectors, so the tests do detect differences. An earlier hash-based version passed every small fixture yet produced a wrong $W$ on large repeat-rich inputs. The medium fixtures were added to catch exactly that, and they now pass.
 
 #paragraph[Performance.]
-@tab:rust-syn and @tab:rust-real report end-to-end times (counts, connection phase, Euler tour and order-merge) on a 32-core workstation, with peak memory in @tab:rust-syn. Greedy runs on one thread.
+@tab:rust-syn and @tab:rust-real report end-to-end times (counts, connection phase, Euler tour and order-merge) on a 32-core workstation, with peak memory in @tab:rust-syn. Greedy's merging loop is sequential; its instance reduction and automaton construction share the parallel code of the 2-approximation and ran with the default thread pool.
 
 #show figure.where(kind: table): it => { show figure.caption: set align(left); it }
 #figure(
@@ -509,10 +509,10 @@ The test suite generates fixtures with the Python reference: 3,712 small instanc
       table.hline(stroke: 0.8pt),
       table.header([genome], [$L$], [greedy], [ours+om], [greedy time], [ours, 1 thread], [ours, 16 threads], [memory]),
       table.hline(stroke: 0.5pt),
-      [random genome], [$2 dot 10^6$], [1.0000], [1.0000], [0.27 s], [1.82 s], [0.73 s], [0.5 GB],
-      [repeat-rich genome], [$2 dot 10^6$], [1.0091], [*1.0000*], [0.24 s], [2.30 s], [1.08 s], [0.4 GB],
-      [random genome], [$10^7$], [1.0000], [1.0000], [2.31 s], [11.60 s], [4.74 s], [2.2 GB],
-      [repeat-rich genome], [$10^7$], [1.0075], [*1.0002*], [2.25 s], [16.24 s], [7.08 s], [2.1 GB],
+      [random genome], [$2 dot 10^6$], [1.0000], [1.0000], [0.12 s], [1.46 s], [0.49 s], [0.5 GB],
+      [repeat-rich genome], [$2 dot 10^6$], [1.0091], [*1.0000*], [0.12 s], [1.81 s], [0.92 s], [0.4 GB],
+      [random genome], [$10^7$], [1.0000], [1.0000], [0.64 s], [9.62 s], [2.71 s], [2.2 GB],
+      [repeat-rich genome], [$10^7$], [1.0075], [*1.0002*], [0.59 s], [13.45 s], [5.18 s], [2.1 GB],
       table.hline(stroke: 0.8pt),
     )
   },
@@ -532,19 +532,19 @@ The test suite generates fixtures with the Python reference: 3,712 small instanc
       table.hline(stroke: 0.8pt),
       table.header([input], [$L$], [$n$], [greedy], [ours+om], [greedy time], [ours, 16 threads], [hard cases]),
       table.hline(stroke: 0.5pt),
-      [GENCODE transcripts], [$2 dot 10^6$], [802], [1.00000], [1.00000], [0.20 s], [1.46 s], [0],
-      [GENCODE transcripts], [$10^7$], [3,728], [1.00000], [1.00000], [1.17 s], [7.54 s], [0],
-      [simulated transcript reads], [$2 dot 10^6$], [17,345], [1.00000], [1.00001], [0.25 s], [1.08 s], [0],
-      [simulated transcript reads], [$10^7$], [84,766], [1.00000], [1.00000], [2.54 s], [8.12 s], [0],
-      [SEQC RNA-seq reads], [$2 dot 10^6$], [19,735], [1.00004], [1.00008], [0.28 s], [1.44 s], [0],
-      [SEQC RNA-seq reads], [$10^7$], [95,419], [1.00001], [1.00004], [2.57 s], [9.06 s], [1],
+      [GENCODE transcripts], [$2 dot 10^6$], [802], [1.00000], [1.00000], [0.17 s], [1.38 s], [0],
+      [GENCODE transcripts], [$10^7$], [3,728], [1.00000], [1.00000], [1.15 s], [6.95 s], [0],
+      [simulated transcript reads], [$2 dot 10^6$], [17,345], [1.00000], [1.00001], [0.12 s], [0.87 s], [0],
+      [simulated transcript reads], [$10^7$], [84,766], [1.00000], [1.00000], [0.60 s], [5.71 s], [0],
+      [SEQC RNA-seq reads], [$2 dot 10^6$], [19,735], [1.00004], [1.00008], [0.12 s], [1.09 s], [0],
+      [SEQC RNA-seq reads], [$10^7$], [95,419], [1.00001], [1.00004], [0.56 s], [6.55 s], [1],
       table.hline(stroke: 0.8pt),
     )
   },
 ) <tab:rust-real>
 #v(6pt)
 
-#ind At $L = 10^7$, the full algorithm takes $4.7$--$9.1$#h(1em/6)s on $16$ threads, using $2$--$3.5$#h(1em/6)GB. On one thread it takes $11.6$--$16.2$#h(1em/6)s on the synthetic sets. Greedy takes about $1.2$--$2.6$#h(1em/6)s. The Python prototype needs $80$--$100$#h(1em/6)s for the counts alone at $L = 2 dot 10^6$. The two kinds of data behave differently:
+#ind At $L = 10^7$, the full algorithm takes $2.7$--$7.0$#h(1em/6)s on $16$ threads, using $2.2$--$3.4$#h(1em/6)GB. On one thread it takes $9.6$--$13.5$#h(1em/6)s on the synthetic sets. Greedy, which shares the instance reduction and the parallel automaton construction, takes $0.6$--$1.2$#h(1em/6)s, so the full algorithm costs $4$--$12$ times as much. The Python prototype needs $80$--$100$#h(1em/6)s for the counts alone at $L = 2 dot 10^6$. The two kinds of data behave differently:
 
 - _Periodic structure._ On the tandem-repeat genomes, greedy is $0.75$--$0.9%$ above $W$, while ours+om reaches $W$ or comes within $0.02%$ of it. Here the period rule is active, with $114$ and $519$ hard cases.
 - _Real data._ On the transcripts and both kinds of reads, greedy is already within $0.005%$ of $W$, and so is ours+om. Hard cases are essentially absent ($0$ or $1$). Here the 2-approximation's contribution is a certificate of near-optimality rather than a shorter string.

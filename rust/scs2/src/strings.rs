@@ -53,6 +53,7 @@ pub const NONE: u32 = u32::MAX;
 impl AhoCorasick {
     /// `patterns` must be sorted and free of duplicates.
     pub fn new(patterns: &[Word]) -> Self {
+        let mut tt = std::time::Instant::now();
         debug_assert!(
             patterns.windows(2).all(|w| w[0] < w[1]),
             "patterns must be sorted, unique"
@@ -152,6 +153,7 @@ impl AhoCorasick {
             t.end_node.push(end);
             prev = p;
         }
+        crate::counts::trace("  ac: trie", &mut tt);
         // children in CSR form (sibling lists are already sorted by symbol)
         let n = t.sym.len();
         drop(last_child);
@@ -170,6 +172,7 @@ impl AhoCorasick {
         t.child_off.push(t.child_node.len() as u32);
         drop(first_child);
         drop(next_sib);
+        crate::counts::trace("  ac: csr", &mut tt);
         // dense table for small alphabets
         let mut present = [false; 256];
         let mut small = true;
@@ -199,39 +202,68 @@ impl AhoCorasick {
                 }
             }
         }
-        // failure and dictionary links in BFS order
+        crate::counts::trace("  ac: dense", &mut tt);
+        // failure and dictionary links, one depth level at a time: a node's links depend only on
+        // shallower nodes, so each level is computed in parallel and then written back
+        use rayon::prelude::*;
         t.fail = vec![0; n];
         t.dict_link = vec![0; n];
-        let mut queue: Vec<u32> = Vec::with_capacity(n);
-        queue.extend_from_slice(&t.child_node[t.child_off[0] as usize..t.child_off[1] as usize]);
-        let mut qi = 0;
-        while qi < queue.len() {
-            let v = queue[qi];
-            qi += 1;
-            for ci in t.child_off[v as usize]..t.child_off[v as usize + 1] {
-                let w = t.child_node[ci as usize];
-                let cw = t.sym[w as usize];
-                let mut f = t.fail[v as usize];
-                let fw = loop {
-                    let x = t.child(f, cw);
-                    if x != NONE {
-                        break x;
-                    }
-                    if f == 0 {
-                        break 0;
-                    }
-                    f = t.fail[f as usize];
-                };
+        let maxd = t.depth.iter().copied().max().unwrap_or(0) as usize;
+        let mut level_start = vec![0usize; maxd + 2];
+        for &d in &t.depth[1..] {
+            level_start[d as usize + 1] += 1;
+        }
+        for d in 1..=maxd + 1 {
+            level_start[d] += level_start[d - 1];
+        }
+        let mut queue: Vec<u32> = vec![0; n - 1];
+        {
+            let mut fill = level_start.clone();
+            // level_start[d] = number of non-root nodes shallower than d
+            for v in 1..n {
+                let d = t.depth[v] as usize;
+                queue[fill[d]] = v as u32;
+                fill[d] += 1;
+            }
+        }
+        for d in 1..=maxd {
+            let level = &queue[level_start[d]..level_start[d + 1]];
+            let links: Vec<(u32, u32)> = if d == 1 {
+                level.iter().map(|_| (0, 0)).collect()
+            } else {
+                let t_ref = &t;
+                level
+                    .par_iter()
+                    .with_min_len(1024)
+                    .map(|&w| {
+                        let cw = t_ref.sym[w as usize];
+                        let mut f = t_ref.fail[t_ref.parent[w as usize] as usize];
+                        let fw = loop {
+                            let x = t_ref.child(f, cw);
+                            if x != NONE {
+                                break x;
+                            }
+                            if f == 0 {
+                                break 0;
+                            }
+                            f = t_ref.fail[f as usize];
+                        };
+                        let dl = if t_ref.term[fw as usize] != NONE {
+                            fw
+                        } else {
+                            t_ref.dict_link[fw as usize]
+                        };
+                        (fw, dl)
+                    })
+                    .collect()
+            };
+            for (&w, (fw, dl)) in level.iter().zip(links) {
                 t.fail[w as usize] = fw;
-                t.dict_link[w as usize] = if t.term[fw as usize] != NONE {
-                    fw
-                } else {
-                    t.dict_link[fw as usize]
-                };
-                queue.push(w);
+                t.dict_link[w as usize] = dl;
             }
         }
         t.bfs = queue;
+        crate::counts::trace("  ac: fail", &mut tt);
         t
     }
 
@@ -296,10 +328,19 @@ pub fn reduce_instance(strings: &[Word]) -> Vec<Word> {
 /// (nothing was removed after deduplication).
 pub fn reduce_instance_keep_ac(strings: &[Word]) -> (Vec<Word>, Option<AhoCorasick>) {
     use rayon::prelude::*;
+    let mut tt = std::time::Instant::now();
     let mut s: Vec<Word> = strings.iter().filter(|x| !x.is_empty()).cloned().collect();
     s.par_sort_unstable();
     s.dedup();
+    crate::counts::trace(" reduce: sort", &mut tt);
+    // after deduplication a string can only occur inside a strictly longer one
+    let minlen = s.iter().map(|x| x.len()).min().unwrap_or(0);
+    let maxlen = s.iter().map(|x| x.len()).max().unwrap_or(0);
+    if minlen == maxlen {
+        return (s, None);
+    }
     let ac = AhoCorasick::new(&s);
+    let mut tt = std::time::Instant::now();
     // every pattern occurring inside another pattern (scan in parallel, mark sequentially)
     let hits: Vec<Vec<u32>> = s
         .par_iter()
@@ -325,6 +366,7 @@ pub fn reduce_instance_keep_ac(strings: &[Word]) -> (Vec<Word>, Option<AhoCorasi
             out
         })
         .collect();
+    crate::counts::trace(" reduce: scan", &mut tt);
     let mut dead = vec![false; s.len()];
     let mut any = false;
     for h in hits {

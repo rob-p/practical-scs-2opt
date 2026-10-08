@@ -522,26 +522,36 @@ pub fn compute_counts(input: &[Word]) -> Counts {
     }
 
     // ---- pair overlap words: suffixes of x that are in P lie on the F failure chain of x ----
-    let mut f2r = vec![NONE; nf];
-    let mut r2f = vec![NONE; nr];
-    let mut rpath: Vec<u32> = Vec::with_capacity(maxlen + 1);
-    for si in 0..ns {
-        // rpath[t] = R node of the suffix of length t
-        rpath.clear();
-        let mut v = r.end_node[rpos[si] as usize];
-        while v != NONE {
-            rpath.push(v);
-            v = r.parent[v as usize];
-        }
-        rpath.reverse();
-        let mut fv = f.end_node[si];
-        while fv != 0 {
-            let rn = rpath[f.depth[fv as usize] as usize];
-            f2r[fv as usize] = rn;
-            r2f[rn as usize] = fv;
-            fv = f.fail[fv as usize];
-        }
-    }
+    // in parallel over inputs; concurrent writers of a slot always store the same value
+    let (f2r, r2f): (Vec<u32>, Vec<u32>) = {
+        use std::sync::atomic::AtomicU32;
+        let f2r_a: Vec<AtomicU32> = (0..nf).map(|_| AtomicU32::new(NONE)).collect();
+        let r2f_a: Vec<AtomicU32> = (0..nr).map(|_| AtomicU32::new(NONE)).collect();
+        (0..ns).into_par_iter().for_each_init(
+            || Vec::with_capacity(maxlen + 1),
+            |rpath: &mut Vec<u32>, si| {
+                // rpath[t] = R node of the suffix of length t
+                rpath.clear();
+                let mut v = r.end_node[rpos[si] as usize];
+                while v != NONE {
+                    rpath.push(v);
+                    v = r.parent[v as usize];
+                }
+                rpath.reverse();
+                let mut fv = f.end_node[si];
+                while fv != 0 {
+                    let rn = rpath[f.depth[fv as usize] as usize];
+                    f2r_a[fv as usize].store(rn, Relaxed);
+                    r2f_a[rn as usize].store(fv, Relaxed);
+                    fv = f.fail[fv as usize];
+                }
+            },
+        );
+        (
+            f2r_a.into_iter().map(|x| x.into_inner()).collect(),
+            r2f_a.into_iter().map(|x| x.into_inner()).collect(),
+        )
+    };
     // skip pointers: nearest proper failure ancestor that is not an overlap word (0 if none);
     // nodes are processed by increasing depth so that the failure target is already done
     let skip_of = |t: &AhoCorasick, paired: &Vec<u32>| -> Vec<u32> {
@@ -556,8 +566,7 @@ pub fn compute_counts(input: &[Word]) -> Counts {
         }
         sk
     };
-    let f_skip = skip_of(&f, &f2r);
-    let r_skip = skip_of(&r, &r2f);
+    let (f_skip, r_skip) = rayon::join(|| skip_of(&f, &f2r), || skip_of(&r, &r2f));
     trace("pairing + skip", &mut tt);
     // word ids: F node v -> v; R node rn -> r2f[rn] if paired, else nf + rn
     let rid = |rn: u32| -> usize {
