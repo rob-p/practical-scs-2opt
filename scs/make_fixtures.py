@@ -3,11 +3,13 @@ brute-force reference) and the greedy output string from greedy.py (tie-breaking
 import json, random, sys
 from compact import compute_counts_compact
 from greedy import greedy_scs
+from connect import superstring
 import search, exp2, fuzz_cov, bench
 
 def entry(strs):
     S, u, d, W = compute_counts_compact(strs)
-    return {"strings": strs, "W": W, "u": u, "d": d, "greedy": greedy_scs(strs)}
+    return {"strings": strs, "W": W, "u": u, "d": d, "greedy": greedy_scs(strs),
+            "superstring": superstring(strs, check=False)}
 
 rng = random.Random(7); random.seed(7)
 insts = []
@@ -23,7 +25,9 @@ for i in range(200):  # non-ASCII alphabets (greedy's bad family, small copies)
 for i in range(12):  # medium read sets
     g = bench.repgenome(rng, 3000) if i % 2 else "".join(rng.choice("acgt") for _ in range(3000))
     insts.append(bench.reads(rng, 0, rng.choice([100, 200, 300]), rng.choice([30, 50]), g))
-out = [entry(s) for s in insts]
+from multiprocessing import Pool
+with Pool() as pool:
+    out = pool.map(entry, insts, chunksize=16)
 path = sys.argv[1]
 with open(path, "w") as f:
     json.dump(out, f, separators=(",", ":"), ensure_ascii=False)

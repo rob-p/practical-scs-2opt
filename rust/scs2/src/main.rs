@@ -1,4 +1,4 @@
-use scs2::{counts::compute_counts, greedy, io::read_strings, strings::to_string};
+use scs2::{connect, counts::compute_counts, greedy, io::read_strings, strings::to_string};
 use std::time::Instant;
 
 const USAGE: &str =
@@ -56,6 +56,35 @@ fn main() {
                 c.stats.t_phase_b,
                 dt
             );
+        }
+        "solve" => {
+            let c = compute_counts(&input);
+            let t_counts = t.elapsed().as_secs_f64();
+            let (s, st) = connect::superstring(&c);
+            let t_connect = t.elapsed().as_secs_f64() - t_counts;
+            let om = greedy::order_merge(&s, &input);
+            let dt = t.elapsed().as_secs_f64();
+            println!(
+                "{{\"cmd\":\"solve\",\"n\":{},\"L\":{},\"W\":{},\"len\":{},\"len_om\":{},\"added\":{},\"groups\":{},\"layers\":{},\"blocks\":{},\"hard_cases\":{},\"requests\":{},\"cycles\":{},\"t_counts\":{:.3},\"t_connect\":{:.3},\"secs\":{:.3}}}",
+                c.strings.len(),
+                total_len,
+                c.w,
+                s.len(),
+                om.len(),
+                st.added,
+                st.groups,
+                st.layers,
+                st.blocks,
+                st.hard_cases,
+                st.requests,
+                st.cycles,
+                t_counts,
+                t_connect,
+                dt
+            );
+            if let Some(p) = out_path {
+                std::fs::write(p, to_string(&om)).unwrap();
+            }
         }
         _ => {
             eprintln!("{USAGE}");

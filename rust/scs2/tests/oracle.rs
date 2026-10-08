@@ -120,3 +120,47 @@ fn greedy_matches_oracle() {
         insts.len()
     );
 }
+
+fn check_superstrings(insts: &[Value]) {
+    let mut failures = 0;
+    for (i, inst) in insts.iter().enumerate() {
+        let strs = strings_of(inst);
+        let c = compute_counts(&strs);
+        let (t, _) = scs2::connect::superstring(&c);
+        if to_string(&t) != inst["superstring"].as_str().unwrap() {
+            failures += 1;
+            if failures <= 3 {
+                eprintln!(
+                    "instance {i}: rust len {} oracle len {} strings={}",
+                    t.len(),
+                    inst["superstring"].as_str().unwrap().chars().count(),
+                    inst["strings"]
+                );
+            }
+        }
+        assert!(t.len() as i64 <= 2 * c.w, "longer than 2W");
+        for x in &c.strings {
+            assert!(
+                t.windows(x.len()).any(|w| w == &x[..]),
+                "superstring misses an input"
+            );
+        }
+    }
+    assert_eq!(
+        failures,
+        0,
+        "{failures} of {} superstrings differ",
+        insts.len()
+    );
+}
+
+#[test]
+fn superstring_matches_oracle() {
+    check_superstrings(&load());
+}
+
+#[test]
+#[ignore]
+fn superstring_matches_oracle_medium() {
+    check_superstrings(&load_file("oracle_medium.json"));
+}

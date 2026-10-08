@@ -30,8 +30,8 @@ that never builds the substring set.
 
 ## Rust
 
-`rust/` holds Rust implementations of greedy and of the count step, tested for exact agreement
-with the Python reference; see [`rust/README.md`](rust/README.md).
+`rust/` holds a Rust implementation of the full 2-approximation and of greedy, tested for exact
+agreement (identical superstrings) with the Python reference; see [`rust/README.md`](rust/README.md).
 
 ## Running
 

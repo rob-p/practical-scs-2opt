@@ -3,6 +3,7 @@ Rust test `counts_match_oracle_medium`. Output is large, so it is generated on d
 import json, random, sys
 from multiprocessing import Pool
 from compact import compute_counts_compact
+from connect import superstring
 from bench import repgenome, reads
 
 def micro(rng, unit_len, G):
@@ -20,7 +21,7 @@ def make(seed):
     g = repgenome(rng, rng.choice([5000, 10000, 20000])) if seed % 2 else micro(rng, rng.randint(1, 7), 8000)
     strs = reads(rng, 0, rng.choice([300, 800, 1500]), rng.choice([40, 70, 100]), g)
     S, u, d, W = compute_counts_compact(strs)
-    return {"strings": strs, "W": W, "u": u, "d": d}
+    return {"strings": strs, "W": W, "u": u, "d": d, "superstring": superstring(strs, check=False)}
 
 if __name__ == "__main__":
     with Pool() as p:
