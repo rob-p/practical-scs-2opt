@@ -32,6 +32,7 @@ that never builds the substring set.
 
 `rust/` holds a Rust implementation of the full 2-approximation and of greedy, tested for exact
 agreement (identical superstrings) with the Python reference; see [`rust/README.md`](rust/README.md).
+[`OPTIMIZATIONS.md`](OPTIMIZATIONS.md) lists the optimizations that remain.
 
 ## Running
 
