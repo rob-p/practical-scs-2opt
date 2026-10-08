@@ -24,8 +24,14 @@ that never builds the substring set.
 | `scs/greedy.py` | Efficient max-overlap greedy (Aho–Corasick) and the order-merge post-pass |
 | `scs/experiments.py`, `scs/summarize.py` | Greedy-vs-2-approximation experiments; results in `scs/experiments_results.json` |
 | `scs/validate_*.py`, `scs/test_*.py`, `scs/verify_lemmas.py` | Differential tests against the reference implementation and checks of the note's lemmas |
+| `scs/make_fixtures*.py`, `scs/make_bench_data.py` | Oracle fixtures and benchmark inputs for the Rust code |
 | `scs/fuzz_*.py`, `scs/search.py` | Randomized and coverage-guided fuzzing |
 | `scs/exp*.py`, `scs/dominate.py`, `scs/leastcex.py` | Exploratory experiments behind the conjectures (now theorems) |
+
+## Rust
+
+`rust/` holds Rust implementations of greedy and of the count step, tested for exact agreement
+with the Python reference; see [`rust/README.md`](rust/README.md).
 
 ## Running
 
